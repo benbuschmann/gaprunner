@@ -4,6 +4,13 @@ import json
 import threading
 import time
 
+import gaprunner.runner as _runner
+
+# Tests must not depend on the test machine's RAM: with /proc/meminfo, the runner refuses to start jobs that would take
+# host memory below policy.cpu_floor_gib (16 GiB by default), so on a small CI machine no job would ever start. Here host
+# memory is unknown (as on macOS); a test of the host-memory rules sets runner.host_mem itself.
+_runner._mem_available_gib = lambda: None
+
 from gaprunner import drivers
 
 drivers.CACHE_S = 0          # tests need immediate process discovery
