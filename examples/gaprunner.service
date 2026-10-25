@@ -1,7 +1,7 @@
 # Example systemd unit for GapRunner.
 #
 #   sudo useradd --system --create-home gaprunner          # or use your own account (User= below)
-#   sudo -u gaprunner python3 -m venv /opt/gaprunner/venv && sudo /opt/gaprunner/venv/bin/pip install gaprunner
+#   sudo -u gaprunner python3 -m venv /opt/gaprunner/venv && sudo /opt/gaprunner/venv/bin/pip install git+https://github.com/benbuschmann/gaprunner
 #   sudo mkdir -p /etc/gaprunner && gaprunner example | sudo tee /etc/gaprunner/gaprunner.toml   # then edit it
 #   sudo cp gaprunner.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now gaprunner
 #
