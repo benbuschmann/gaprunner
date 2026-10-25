@@ -94,9 +94,10 @@ class RunnerRulesTest(unittest.TestCase):
         self.ticks(r, 4)
         self.assertEqual(r.job["j"]["state"], "parked")
         os.remove(r.drain_path)
-        r.settle_until = r.clock() + 0.5
+        r.settle_until = r.clock() + 60                               # long enough for any machine's ticks
         self.ticks(r, 4)
         self.assertEqual(r.job["j"]["state"], "parked")              # still settling after a restart
+        r.settle_until = r.clock()                                   # settling over
         self.ticks(r, 12)
         self.assertEqual(r.job["j"]["state"], "hot")
 
