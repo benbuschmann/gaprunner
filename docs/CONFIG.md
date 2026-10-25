@@ -14,6 +14,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `tick_s` | `1.0` | how often the scheduler runs |
 | `gpu_index` | the GPU with the most memory | an index or a `"GPU-..."` UUID |
 | `gpu_total_gib` | read from the driver | override the GPU's size |
+| `unified_memory` | `"auto"` | `true` where the GPU shares the machine's memory; `auto` turns it on for GPUs known to (GB10). See [Shared memory](#shared-memory-dgx-spark) |
 | `verify_free_s` | `30.0` | how long to wait for the driver to show memory free before starting or waking something |
 | `kill_stuck_jobs` | `true` | stop a job hard when it won't step aside in time, so a service can wake |
 | `queue_file` | `<state_dir>/queue.json` | job order and the page's changes (Start/Wind down, Queue, tags, ...) |
@@ -115,6 +116,30 @@ Work started by hand that GapRunner should know about.
 | `action` | | `track`: count its memory (not "unknown"); `hold`: start nothing while it runs |
 | `pgrep` or `pids_cmd` | | how to find its processes |
 | `linger_s` | `15.0` | keep the claim this long after its processes are gone |
+
+## Shared memory (DGX Spark)
+
+On a DGX Spark (GB10) the GPU has no memory of its own: CPU and GPU share the machine's 128 GB, and `nvidia-smi`
+reports memory as `[N/A]`. GapRunner then works from `/proc/meminfo` instead:
+
+- **One pool.** The memory shelf is the machine's memory (used = `MemTotal - MemAvailable`), and `cpu_floor_gib` comes
+  off the top of it. There is no separate host-memory check, because it would count the same memory twice.
+- **`hbm_gib` is the whole footprint.** Put everything an entry holds (its GPU allocations and its own process memory)
+  in `hbm_gib`, running and parked. `gaprunner calibrate` measures it as the rise in the machine's used memory since
+  before the job started, so keep other work steady while it measures.
+- **Stepping aside has to free memory, not move it.** A vLLM level-1 sleep or a cuda-checkpoint freeze moves GPU memory
+  to CPU memory, which here is the same memory, so it frees almost nothing. What frees memory: vLLM `sleep_level = 2`
+  (drops the weights; the wake reloads them, quickly if they are still in the page cache), the `restart` driver, or a
+  `command` hook that saves to disk. Record the parked footprint honestly and the scheduler plans around it.
+- **`coexist = "yield"` is often the best fit.** If the model and a job both fit in memory, the job keeps its memory and
+  only pauses its compute while the model answers.
+- **Per-process memory is unknown.** The driver doesn't report it, so every entry is shown at its recipe size (as an
+  estimate) and the rest of the machine's use is "system and other".
+
+`unified_memory = true` forces this mode for other shared-memory GPUs; `false` turns it off. On a GPU with its own
+memory, a `[N/A]` reading is treated as unreadable (nothing starts), never as shared memory.
+
+See [examples/dgx-spark.toml](../examples/dgx-spark.toml).
 
 ## When the gate stops answering
 

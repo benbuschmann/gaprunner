@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.0
+
+- Shared-memory machines (NVIDIA DGX Spark, GB10). There the GPU has no memory of its own and `nvidia-smi` reports
+  memory as `[N/A]`, so GapRunner couldn't read the GPU and started nothing. It now reads the machine's memory
+  (`/proc/meminfo`) as one pool: `hbm_gib` is an entry's whole footprint, `cpu_floor_gib` comes off the pool, and the
+  separate host-memory check is skipped so the same memory isn't counted twice. Calibration measures a job as the rise
+  in the machine's used memory. The page shows one "Memory" bar. Detected for GB10; `unified_memory = true | false`
+  forces it on or off. A GPU with its own memory that reports `[N/A]` is still treated as unreadable.
+- `examples/dgx-spark.toml`: a model with vLLM sleep level 2, a `yield` job beside it and a job for its quiet spells.
+
 ## 0.18.3
 
 - Page: a job never gets a service's colour. Services take the first colours and jobs cycle through the rest (before,

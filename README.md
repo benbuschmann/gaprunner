@@ -62,6 +62,7 @@ The scheduler is a pure function of a snapshot, so the daemon and `gaprunner rep
 |---|---|
 | **Placements** | Each job says where it may run: beside the model (`share`), beside it but pausing its compute while the model answers (`yield`), only while the model sleeps (`no`), or only in slow-wake / no-model periods (`window_only`). |
 | **Queue** | Queue order, `after` chains (run B once A has finished), a starvation guard, a host-memory floor and a GPU memory reserve. |
+| **DGX Spark** | On shared-memory machines (GB10) the GPU and CPU are one pool; GapRunner reads it from the OS and counts each footprint once. See [Shared memory](docs/CONFIG.md#shared-memory-dgx-spark) and [the example](examples/dgx-spark.toml). |
 | **Engines** | Several engines behind one service name, switched by hand, from the page or on a daily schedule. The gate rewrites the request's model name, so clients keep one alias. |
 | **Recipes** | A job is a TOML entry: how to start it, its goal, progress, saved-point, summary and health commands, its memory per tier, a colour. `gaprunner calibrate` measures the numbers for you; `warm_cmd` brings an engine back to full speed after a wake. |
 | **Web page** | One self-contained HTML file (no CDN, no build step) with live updates. See below. |
@@ -112,7 +113,7 @@ The scheduler is a pure function of a snapshot, so the daemon and `gaprunner rep
 ## Try it (shadow mode first)
 
 You need **Linux, Python 3.11+ and an NVIDIA GPU** with `nvidia-smi` working, and a model server that can sleep
-(macOS runs the test suite only). GapRunner is **not on PyPI yet**; install it from GitHub:
+(macOS runs the test suite only). A DGX Spark works too, with its shared memory as one pool. GapRunner is **not on PyPI yet**; install it from GitHub:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

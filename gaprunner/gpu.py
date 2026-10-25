@@ -2,19 +2,24 @@
 free only when the driver says so (an idea taken from Berth).
 
 `stowaways()` lists GPU processes that belong to no configured service or job -- reported, never killed.
+
+Shared memory (DGX Spark / GB10): the GPU has no memory of its own, and nvidia-smi reports memory as [N/A]. There the
+reading is the machine's memory (MemTotal, and MemTotal - MemAvailable as used), with "unified": True, and per-process
+GPU memory is unknown (gib 0.0, "gib_known": False).
 """
 import subprocess
 import time
 
 MIB_PER_GIB = 1024
+UNIFIED_GPUS = ("GB10",)    # GPU names whose memory is the machine's memory
 
 
 class NvidiaSmi:
     """`index` may be an index, a UUID ("GPU-...") or None: None picks the GPU with the most memory, which on a
     workstation with a small display card is the one you want. Readings are cached for `max_age` seconds."""
 
-    def __init__(self, index=None, cmd=("nvidia-smi",), max_age=0.9):
-        self.cmd, self.max_age = list(cmd), max_age
+    def __init__(self, index=None, cmd=("nvidia-smi",), max_age=0.9, unified="auto", meminfo="/proc/meminfo"):
+        self.cmd, self.max_age, self.unified, self.meminfo = list(cmd), max_age, unified, meminfo
         self.index = str(index) if index not in (None, "", "auto") else self._largest()
         self._cache, self._at = None, 0.0
 
@@ -42,15 +47,37 @@ class NvidiaSmi:
         try:
             name, total, used, util, power, temp = self._q(
                 "--query-gpu=name,memory.total,memory.used,utilization.gpu,power.draw,temperature.gpu")[0]
-            procs = [{"pid": int(p), "gib": round(float(m) / MIB_PER_GIB, 2), "name": n}
-                     for p, n, m in self._q("--query-compute-apps=pid,process_name,used_memory")]
+            apps = self._q("--query-compute-apps=pid,process_name,used_memory")
         except (RuntimeError, ValueError, IndexError, subprocess.TimeoutExpired, FileNotFoundError):
             return None
-        self._cache = {"name": name, "total_gib": round(float(total) / MIB_PER_GIB, 2),
-                       "used_gib": round(float(used) / MIB_PER_GIB, 2), "util": _num(util), "power_w": _num(power),
-                       "temp_c": _num(temp), "procs": procs}
+        unified = self.unified is True or (self.unified == "auto" and any(u in name for u in UNIFIED_GPUS))
+        try:
+            if unified:
+                mem = _meminfo(self.meminfo)
+                total_gib, used_gib = mem["MemTotal"], mem["MemTotal"] - mem["MemAvailable"]
+                procs = [{"pid": int(p), "gib": 0.0, "gib_known": False, "name": n} for p, n, _ in apps]
+            else:
+                total_gib, used_gib = float(total) / MIB_PER_GIB, float(used) / MIB_PER_GIB
+                procs = [{"pid": int(p), "gib": round(float(m) / MIB_PER_GIB, 2), "name": n} for p, n, m in apps]
+        except (OSError, KeyError, ValueError):
+            return None
+        self._cache = {"name": name, "total_gib": round(total_gib, 2), "used_gib": round(used_gib, 2),
+                       "util": _num(util), "power_w": _num(power), "temp_c": _num(temp), "procs": procs}
+        if unified:
+            self._cache["unified"] = True
         self._at = time.monotonic()
         return self._cache
+
+
+def _meminfo(path):
+    """{"MemTotal": GiB, "MemAvailable": GiB, ...} from /proc/meminfo."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            k, _, v = line.partition(":")
+            if v.strip().endswith("kB"):
+                out[k] = int(v.split()[0]) / 1024 / 1024
+    return out
 
 
 def _num(x):
@@ -63,13 +90,16 @@ def _num(x):
 class FakeGpu:
     """For tests and replay: memory follows what the test says is resident."""
 
-    def __init__(self, total_gib=100.0):
-        self.total_gib, self.resident = total_gib, {}
+    def __init__(self, total_gib=100.0, unified=False):
+        self.total_gib, self.resident, self.unified = total_gib, {}, unified
 
     def read(self, fresh=False):
-        return {"name": "fake", "total_gib": self.total_gib, "used_gib": round(sum(self.resident.values()), 2),
-                "util": None, "power_w": None, "temp_c": None,
-                "procs": [{"pid": 0, "gib": v, "name": k} for k, v in self.resident.items()]}
+        r = {"name": "fake", "total_gib": self.total_gib, "used_gib": round(sum(self.resident.values()), 2),
+             "util": None, "power_w": None, "temp_c": None,
+             "procs": [{"pid": 0, "gib": v, "name": k} for k, v in self.resident.items()]}
+        if self.unified:                  # like a DGX Spark: memory is the machine's, no per-process figures
+            r["unified"], r["procs"] = True, []
+        return r
 
 
 def wait_free(gpu, need_gib, timeout_s, reserve_gib=0.0, poll_s=0.2):

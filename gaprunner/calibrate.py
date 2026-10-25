@@ -36,13 +36,18 @@ def load(runner, name):
         return None
 
 
-def _sample(runner, name):
+def _sample(runner, name, base=None):
+    """(GPU GiB, CPU GiB) the job holds now. With shared memory the driver has no per-process figure, so the GPU
+    number is the whole job: the rise in the machine's used memory since before it started (`base`)."""
     from .runner import _rss_gib
     j = runner.job[name]
     pids = set(j["driver"].pids())
     r = runner.gpu.read(fresh=True) or {}
+    rss = _rss_gib(list(pids)) or 0.0
+    if r.get("unified"):
+        return (round(max(0.0, r["used_gib"] - base), 2) if base is not None else rss), rss
     hbm = sum(p["gib"] for p in r.get("procs", []) if p["pid"] in pids)
-    return round(hbm, 2), _rss_gib(list(pids)) or 0.0
+    return round(hbm, 2), rss
 
 
 def _du_gib(paths):
@@ -98,6 +103,15 @@ def run(runner, name, warm_s=60.0, cycles=2, settle_s=10.0, poll_s=1.0):
     need = float(sp["running"]["hbm_gib"] or 0)
     reading = runner.gpu.read(fresh=True) or {}
     free = reading.get("total_gib", 0) - reading.get("used_gib", 0) - runner.policy.reserve_gib
+    base = None
+    if reading.get("unified"):
+        if j["state"] != HOT:
+            base = reading.get("used_gib", 0)
+            m["notes"].append("shared memory: the job's memory is measured as the rise in the machine's used memory "
+                              "since before it started, so keep other work steady while it measures")
+        else:
+            m["notes"].append("shared memory: the job was already running, so only its own process memory (RSS) is "
+                              "measured; park it first for a full measurement")
     with runner.lock:
         if runner.paused():
             return done("refused", "GapRunner is paused")
@@ -118,7 +132,7 @@ def run(runner, name, warm_s=60.0, cycles=2, settle_s=10.0, poll_s=1.0):
         while time.time() < t_end:
             if interrupted():
                 return done("interrupted", "a service needed the GPU; partial measurements kept")
-            cyc["warm"].append(_sample(runner, name))
+            cyc["warm"].append(_sample(runner, name, base))
             time.sleep(poll_s)
         _progress_mark(m, sp, warm_s * (c + 1))
         # 3. park
@@ -130,7 +144,7 @@ def run(runner, name, warm_s=60.0, cycles=2, settle_s=10.0, poll_s=1.0):
         m["phase"] = f"cycle {c + 1}: parked"
         t_end = time.time() + settle_s
         while time.time() < t_end:
-            cyc["parked"].append(_sample(runner, name))
+            cyc["parked"].append(_sample(runner, name, base))
             time.sleep(poll_s)
         if c == cycles - 1:
             break
@@ -144,7 +158,7 @@ def run(runner, name, warm_s=60.0, cycles=2, settle_s=10.0, poll_s=1.0):
             if not runner._resume_job(name, reason="calibration"):
                 return done("failed", "resume failed (see Events)")
         deadline = t0 + max(600.0, 5 * float(sp.get("resume_s") or 60))
-        while time.time() < deadline and _sample(runner, name)[0] < 0.9 * steady:
+        while time.time() < deadline and _sample(runner, name, base)[0] < 0.9 * steady:
             time.sleep(0.2)
         cyc["resume_s"] = round(time.time() - t0, 2)
     m["ssd_gib"] = _du_gib(sp.get("ssd_paths", [])) if sp.get("ssd_paths") else None

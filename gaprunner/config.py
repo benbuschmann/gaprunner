@@ -13,6 +13,7 @@ TOP_DEFAULTS = {
     "tick_s": 1.0,
     "gpu_index": None,           # None: the GPU with the most memory; or an index, or a UUID "GPU-..."
     "gpu_total_gib": None,       # None: read from the driver
+    "unified_memory": "auto",    # true where the GPU shares the machine's memory (DGX Spark); auto: known GPUs (GB10)
     "verify_free_s": 30.0,       # how long to wait for the driver to show memory free before a wake/resume
     "kill_stuck_jobs": True,     # a job that will not park within its timeout is killed so the service can wake
     "queue_file": None,          # job order + holds, edited from the web UI; default <state_dir>/queue.json
@@ -61,6 +62,8 @@ def parse(raw):
     top = {**TOP_DEFAULTS, **raw.get("gaprunner", {})}
     if top["mode"] not in ("shadow", "live"):
         raise ConfigError("gaprunner.mode must be shadow or live")
+    if top["unified_memory"] not in ("auto", True, False):
+        raise ConfigError('gaprunner.unified_memory must be "auto", true or false')
     top["state_dir"] = expand(top["state_dir"])
     top["pause_file"] = expand(top["pause_file"]) or os.path.join(top["state_dir"], "PAUSE")
     top["queue_file"] = expand(top["queue_file"]) or os.path.join(top["state_dir"], "queue.json")

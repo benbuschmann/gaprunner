@@ -420,7 +420,7 @@ footer { color: var(--faint); font-size: 12px; padding: 40px 0 30px; }
   </div>
 
   <div class="shelf" id="shelf">
-    <div class="shelf-head"><span><b>GPU memory</b> <span id="shelfsub"></span></span><span id="shelfright"></span></div>
+    <div class="shelf-head"><span><b id="shelftitle">GPU memory</b> <span id="shelfsub"></span></span><span id="shelfright"></span></div>
     <div class="bar" id="bar" role="img" aria-label="GPU memory by holder"></div>
     <div class="keys" id="keys"></div>
     <div class="rail" id="rail"><span>CPU memory</span><div class="track"><div class="fill" id="railfill"></div></div><span id="railtext"></span></div>
@@ -950,7 +950,7 @@ function renderShelf() {
   if (own.length > 3) { const byUser = {}; own.forEach(([k, v]) => { const u = k.split(':')[0] + ': several'; byUser[u] = (byUser[u] || 0) + v; }); own = Object.entries(byUser); }
   for (const [k, v] of own) if (v > 0.05) segs.push({n: k, v, c: 'var(--overflow)', unknown: true, note: `not ${SV()} or a job; GapRunner doesn't manage it`});
   const counted = segs.reduce((t, s) => t + s.v, 0), other = Math.max(0, g.used_gib - counted);
-  if (other > 1) segs.push({n: 'driver and other', v: other, c: 'var(--overflow)', note: ''});
+  if (other > 1) segs.push({n: g.unified ? 'system and other' : 'driver and other', v: other, c: 'var(--overflow)', note: g.unified ? 'everything else using the shared memory' : ''});
   const free = Math.max(0, g.total_gib - g.used_gib);
   const W = $('#bar').clientWidth || 900, wide = v => v / g.total_gib * W;
   const svcNames = Object.keys(S.services);
@@ -959,12 +959,13 @@ function renderShelf() {
       <span class="n">${esc(s.n)}</span><span class="g">${gib(s.v)}${s.paused ? ', paused' : ''}</span></div>`).join('') +
     `<div class="seg free ${wide(free) < 90 ? 'small' : ''}" style="flex:${free} 0 0" title="free: ${gib(free)}"><span class="n">${gib(free)} free</span></div>`;
   $('#keys').innerHTML = segs.filter(s => size(s) === 'small').map(s => `<span><i class="sw ${s.paused || s.unknown ? 'hatched' : ''}" style="background-color:${s.c}"></i>${esc(s.n)} ${gib(s.v)}</span>`).join('');
-  $('#shelfsub').textContent = `${gib(g.used_gib)} used of ${gib(g.total_gib)}`;
+  $('#shelftitle').textContent = g.unified ? 'Memory' : 'GPU memory';    // shared memory (DGX Spark): one pool for CPU and GPU
+  $('#shelfsub').textContent = `${gib(g.used_gib)} used of ${gib(g.total_gib)}${g.unified ? ', shared by CPU and GPU' : ''}`;
   $('#shelfright').innerHTML = [g.util != null ? `<b>${Math.round(g.util)}%</b> busy` : '', g.power_w != null ? `<b>${Math.round(g.power_w)} W</b>` : '',
     g.temp_c != null ? `${Math.round(g.temp_c)} °C` : ''].filter(Boolean).join(', ');
-  $('#bar').setAttribute('aria-label', `GPU memory: ${segs.map(s => `${s.n} ${gib(s.v)}`).join(', ')}, ${gib(free)} free`);
+  $('#bar').setAttribute('aria-label', `${g.unified ? 'Memory' : 'GPU memory'}: ${segs.map(s => `${s.n} ${gib(s.v)}`).join(', ')}, ${gib(free)} free`);
   const tot = S.cpu_total_gib, fr = S.cpu_free_gib;
-  $('#rail').classList.toggle('hide', fr == null);
+  $('#rail').classList.toggle('hide', fr == null || !!(S.gpu && S.gpu.unified));   // shared memory: the bar above is it
   if (fr != null) {
     $('#railtext').textContent = tot ? `${gib(tot - fr)} used of ${gib(tot)}` : `${gib(fr)} free`;
     $('#railfill').style.width = tot ? Math.max(1, Math.min(100, (tot - fr) / tot * 100)) + '%' : '0%';

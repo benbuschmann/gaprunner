@@ -1,0 +1,40 @@
+# Example: an NVIDIA DGX Spark (GB10, 128 GB shared by CPU and GPU) running a mid-size model ("prod") for local agents,
+# with a small LoRA run that pauses while prod answers and an eval that runs while prod sleeps.
+# The sizes and times below are placeholders, not measurements: run `gaprunner calibrate` on each job and keep what it
+# writes. On this machine every `hbm_gib` is the entry's whole footprint (see docs/CONFIG.md, "Shared memory").
+[gaprunner]
+mode = "shadow"                       # watch first; switch to "live" after reviewing what it would have done
+state_dir = "~/.local/state/gaprunner"
+unified_memory = "auto"               # GB10 is detected; nvidia-smi reports its memory as [N/A]
+
+[policy]
+cpu_floor_gib = 12                    # kept free for the OS and everything else on the box
+reserve_gib = 0                       # the floor already covers it here
+max_added_wait_s = 15                 # a level-2 wake reloads weights, so allow a longer first-request wait
+
+[[service]]
+name = "prod"
+driver = "vllm"                       # vllm serve <model> --enable-sleep-mode, VLLM_SERVER_DEV_MODE=1
+upstream = "http://127.0.0.1:8000"
+listen = "127.0.0.1:8100"
+gpu_gib = 60                          # weights + KV cache + the server's own memory
+sleep_level = 2                       # level 1 would move the weights to CPU memory: the same memory here
+idle_park_s = 60
+[service.parked]
+hbm_gib = 6                           # what the sleeping server still holds
+
+[[job]]
+name = "lora-small"
+goal = "LoRA fine-tune of a small model; done when the last step is saved"
+driver = "restart"                    # resumes from its own checkpoint
+coexist = "yield"                     # fits beside prod; pauses its compute while prod answers
+start_cmd = "python train.py --resume"
+gpu_gib = 30
+
+[[job]]
+name = "eval-bench"
+goal = "Score the model on the eval set; done when every item has a result"
+driver = "restart"                    # item-resume: picks up at the next unscored item
+coexist = "no"                        # needs the memory prod holds: runs while prod sleeps
+start_cmd = "python eval.py --resume"
+gpu_gib = 50

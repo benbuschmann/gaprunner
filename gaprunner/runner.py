@@ -38,7 +38,7 @@ class Runner:
             os.makedirs(self.top["state_dir"], exist_ok=True)
         self.audit_path = os.path.join(self.top["state_dir"], "audit.jsonl")
         self.status_path = os.path.join(self.top["state_dir"], "status.json")
-        self.gpu = gpu or G.NvidiaSmi(self.top["gpu_index"])
+        self.gpu = gpu or G.NvidiaSmi(self.top["gpu_index"], unified=self.top["unified_memory"])
         self.lock = threading.RLock()
         self.costs = CostBook(os.path.join(self.top["state_dir"], "costs.json"))
         from . import servers
@@ -787,6 +787,11 @@ class Runner:
         now = self.clock()
         reading = self.gpu.read()
         total = self.top["gpu_total_gib"] or (reading or {}).get("total_gib") or 0.0
+        # shared memory: GPU and CPU are one pool. A footprint's hbm_gib is the whole of it, the host floor comes off the
+        # pool, and there is no separate host-memory check (it would count the same memory twice)
+        unified = bool((reading or {}).get("unified"))
+        if unified:
+            total = max(0.0, total - self.policy.cpu_floor_gib)
         q = C.queue_overrides(self.top)
         services = [Service(n, e["state"], e["inflight"] + e["job_inflight"], max(e["last_done"], e.get("job_last_done", 0)),
                             e["spec"]["gpu_gib"], e["service"]["idle_park_s"],
@@ -800,9 +805,9 @@ class Runner:
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
                             sp["order"], sp["hold"], sp["window_only"], sp["enabled"], e["waiting_since"], e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
-                            max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0))))
+                            0.0 if unified else max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0))))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
-                        self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
+                        self.paused(), C.exclusive_window(self.top), self.holds(), None if unified else self.host_mem())
 
     def tick(self):
         if not self.lock.acquire(blocking=False):
@@ -863,12 +868,27 @@ class Runner:
                          j["state"] == HOT and not j["frozen"])
 
 
+    def _all_pids(self):
+        """Every pid a configured entry (any engine) or claim owns."""
+        pids = {p for c in self.claims for p in c["pids"]}
+        for sv in self.svc.values():
+            for e in sv["engines"].values():
+                pids.update(e["driver"].pids())
+        for e in {**self.svc, **self.job}.values():
+            pids.update(e["driver"].pids())
+        return pids
+
     def holders(self, reading):
         """({name: GiB on the GPU}, {name: measured?}, stowaway procs). Matched by pid when the config gives pids
         (`pids`, `pid_file` or `pgrep`); a hot entry without pids is counted at its configured size, as an estimate.
-        Stowaways are GPU processes no entry claims by pid (give every entry pids to keep this list honest)."""
-        procs = (reading or {}).get("procs", [])
+        Stowaways are GPU processes no entry claims by pid (give every entry pids to keep this list honest).
+        With shared memory the driver gives no per-process memory: every entry counts as an estimate."""
+        every = (reading or {}).get("procs", [])
+        procs = [p for p in every if p.get("gib_known", True)]
         claimed, gib, measured = set(), {}, {}
+        if len(procs) < len(every):               # shared memory: owned processes aren't stowaways, just unmeasured
+            owned = self._all_pids()
+            claimed = {p["pid"] for p in every if p["pid"] in owned}
         for sn, sv in self.svc.items():           # a service's other engines (asleep, or starting) are its own
             for en, e in sv["engines"].items():
                 if en == sv["engine"]:
@@ -894,7 +914,7 @@ class Runner:
                 guess.append(n)
             else:
                 gib[n], measured[n] = 0.0, True
-        stow = [p for p in procs if p["pid"] not in claimed]
+        stow = [p for p in every if p["pid"] not in claimed]
         # an entry seen only as "hot" (no pids found) is counted at its recipe size, but only out of the GPU memory
         # nothing else accounts for, so a guess never double-counts unknown processes or exceeds the GPU
         left = max(0.0, (reading or {}).get("used_gib", 0.0) - sum(gib.values()) - sum(p["gib"] for p in stow)) if reading else None
