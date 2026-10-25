@@ -205,22 +205,38 @@ class Driver:
         raise DriverError(f"{self.spec.get('name')}: not {want} after {timeout:.0f}s (state {self.state()})")
 
 
+def _timed_out(e):
+    """True when an HTTP call failed by timing out (the server is up but slow), not by being refused or reset."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
 class Vllm(Driver):
+    #: A server busy with long model steps can answer /is_sleeping slowly. Within this long of the last real answer,
+    #: a timed-out check keeps that answer instead of reporting UNKNOWN (which would send a request down the wake
+    #: path for a server that is already awake). A refused connection or an error status is still UNKNOWN at once.
+    STALE_OK_S = 120.0
+    STATE_TIMEOUT_S = 5.0
+
     def __init__(self, spec):
         super().__init__(spec)
         self.url = spec["url"].rstrip("/")
         self.level = int(spec.get("sleep_level", 1))
         self.headers = spec.get("headers", {})
+        self._last = None                     # (state, monotonic time) of the last real answer
 
     def state(self):
         try:
-            code, v = http("GET", self.url + "/is_sleeping", headers=self.headers, timeout=5)
-        except OSError:
+            code, v = http("GET", self.url + "/is_sleeping", headers=self.headers, timeout=self.STATE_TIMEOUT_S)
+        except OSError as e:
+            if _timed_out(e) and self._last and time.monotonic() - self._last[1] <= self.STALE_OK_S:
+                return self._last[0]
             return UNKNOWN
         if code != 200:
             return UNKNOWN
         asleep = v.get("is_sleeping") if isinstance(v, dict) else str(v).strip().lower() == "true"
-        return PARKED if asleep else HOT
+        st = PARKED if asleep else HOT
+        self._last = (st, time.monotonic())
+        return st
 
     def park(self):
         code, v = http("POST", f"{self.url}/sleep?level={self.level}", body=b"", headers=self.headers, timeout=self.timeout)

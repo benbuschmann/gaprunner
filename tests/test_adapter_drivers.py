@@ -95,3 +95,21 @@ class CommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VllmSlowStateTest(unittest.TestCase):
+    def test_a_slow_is_sleeping_keeps_the_last_answer(self):
+        from fakes import FakeVllm
+        from gaprunner import drivers as D
+        from gaprunner.scheduler import HOT, UNKNOWN
+        fake = FakeVllm(None, "prod", 10.0)
+        d = D.Vllm({"name": "prod", "url": fake.url})
+        d.STATE_TIMEOUT_S = 0.3
+        self.assertEqual(d.state(), HOT)
+        fake.state_delay = 1.0                       # busy: the check times out
+        self.assertEqual(d.state(), HOT)             # the last real answer stands
+        d._last = (HOT, d._last[1] - d.STALE_OK_S - 1)
+        self.assertEqual(d.state(), UNKNOWN)         # too old to trust
+        fresh = D.Vllm({"name": "prod", "url": fake.url})
+        fresh.STATE_TIMEOUT_S = 0.3
+        self.assertEqual(fresh.state(), UNKNOWN)     # never had a real answer

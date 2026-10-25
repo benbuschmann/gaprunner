@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.2
+
+- vLLM driver: when `/is_sleeping` times out (a server busy with slow model steps), the driver keeps its last real
+  answer for up to 2 minutes instead of reporting the state as unknown. An unknown state sent requests down the wake
+  path for a server that was already awake: the wake then waited for GPU memory the server itself held, until the
+  wake deadline (seen as ~20 s waits and `overlap_risk` events). A refused connection or an error status is still
+  unknown at once.
+
 ## 0.18.1 (first public release)
 
 Everything below, published together.

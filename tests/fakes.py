@@ -22,6 +22,7 @@ class FakeVllm:
 
     def __init__(self, gpu=None, name="prod", gib=60.0, wake_delay=0.05, down_file=None):
         self.sleeping, self.calls, self.wake_delay, self.down_file = False, [], wake_delay, down_file
+        self.state_delay = 0.0                # seconds /is_sleeping takes to answer (a busy server)
         self.gpu, self.name, self.gib = gpu, name, gib
         if gpu is not None:
             gpu.resident[name] = gib
@@ -56,6 +57,7 @@ class FakeVllm:
                 if self.down():
                     return
                 if self.path == "/is_sleeping":
+                    time.sleep(fake.state_delay)
                     return self._json(200, {"is_sleeping": fake.sleeping})
                 self._json(404, {})
 
