@@ -29,7 +29,7 @@ Over **7.3 hours and 1,214 requests** to the model:
   1.5–2 s: its park hook puts its own vLLM server to sleep and freezes what is left with cuda-checkpoint, leaving 0 GiB
   on the GPU.
 
-These come from one machine and one workload; your models, jobs and traffic will give different numbers.
+That's one machine and one workload. Yours will look different.
 
 ## How it works
 
@@ -96,8 +96,8 @@ The scheduler is a pure function of a snapshot, so the daemon and `gaprunner rep
 
 - **A deadline on request wakes.** When a request needs the GPU, jobs get `wake_deadline_s` to step aside (at least
   twice a job's own measured step-aside time); a stuck job is stopped hard and the wake goes ahead.
-- **Memory counts as free only when the driver says so** (nvidia-smi), never on the engine's word. GPU processes that
-  belong to nothing configured are reported, never killed.
+- **Memory counts as free only when nvidia-smi shows it free.** GPU processes that belong to nothing configured are
+  reported and left alone.
 - **Prod only:** a kill switch (the button on the page, or `gaprunner pause` / `unpause`): every job steps aside, the
   services stay awake and nothing new starts.
 - **Wind down:** a job with a `saved_cmd` stops at its next saved point; without one, it finishes its current run.
@@ -184,8 +184,8 @@ from these projects. Credits in [docs/PRIOR-ART.md](docs/PRIOR-ART.md).
 
 ## Security
 
-GapRunner is built for a machine you control, on loopback or a private network; it isn't built to face the internet.
-Read [SECURITY.md](SECURITY.md) before exposing anything. In short: the config is code; the PIN guards changes only,
+Run GapRunner on a machine you control, on loopback or a private network. Read [SECURITY.md](SECURITY.md) before
+exposing anything. In short: the config is code; the PIN guards changes only,
 and anyone who can reach the page or the gate can read status and job logs; the gate passes any path through to your
 model server.
 
