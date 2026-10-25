@@ -1,0 +1,1838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GapRunner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='4' width='8' height='8' rx='2' fill='%232a78d6'/%3E%3Crect x='10' y='4' width='5' height='8' rx='2' fill='%23eb6834'/%3E%3C/svg%3E">
+<style>
+/* GapRunner: one shared GPU. The page's one bold element is the GPU "shelf"; everything else stays quiet. */
+:root {
+  color-scheme: light;
+  --paper: #f2f4f6; --surface: #ffffff; --sunk: #e9edf1; --rule: #dce1e6;
+  --ink: #17212b; --muted: #5a6773; --faint: #67727e;
+  --accent: #2a78d6;                       /* prod's own colour is the page's accent */
+  --s1: #2a78d6; --s2: #e8743b; --s3: #16a3a3; --s4: #8f4fd0; --s5: #8c8c2e; --s6: #d6559a; --s7: #3b4cc0; --s8: #c26a1d;
+  --overflow: #9aa4ae; --free: #f7f9fa; --free-ink: #7d8893;
+  --good: #0ca30c; --good-ink: #0a7a0a; --warn: #fab219; --warn-ink: #8a5a00; --bad: #d03b3b; --bad-ink: #b02a2a;
+  --hatch: rgba(23, 33, 43, .28);
+  --shadow: 0 1px 0 rgba(23, 33, 43, .04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #12171c; --surface: #1a2027; --sunk: #222932; --rule: #2b333c;
+    --ink: #e6ebf0; --muted: #a3adb7; --faint: #7f8a95;
+    --accent: #3987e5;
+    --s1: #3987e5; --s2: #d96a36; --s3: #1aa3a3; --s4: #a06ae0; --s5: #929230; --s6: #d6609a; --s7: #5d6fe0; --s8: #c8762a;
+    --overflow: #5d6772; --free: #1e252d; --free-ink: #8b96a1;
+    --good: #2fb82f; --good-ink: #5fd35f; --warn: #fab219; --warn-ink: #f5c35a; --bad: #e66767; --bad-ink: #ff8a8a;
+    --hatch: rgba(255, 255, 255, .30);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #12171c; --surface: #1a2027; --sunk: #222932; --rule: #2b333c;
+  --ink: #e6ebf0; --muted: #a3adb7; --faint: #7f8a95;
+  --accent: #3987e5;
+  --s1: #3987e5; --s2: #d96a36; --s3: #1aa3a3; --s4: #a06ae0; --s5: #929230; --s6: #d6609a; --s7: #5d6fe0; --s8: #c8762a;
+  --overflow: #5d6772; --free: #1e252d; --free-ink: #8b96a1;
+  --good: #2fb82f; --good-ink: #5fd35f; --warn: #fab219; --warn-ink: #f5c35a; --bad: #e66767; --bad-ink: #ff8a8a;
+  --hatch: rgba(255, 255, 255, .30);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
+button, select, input { font: inherit; color: inherit; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+/* top bar */
+.top { display: flex; align-items: baseline; gap: 10px 18px; flex-wrap: wrap; padding: 18px 0 6px; }
+.brand { font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.ver { font-size: 12px; color: var(--faint); font-weight: 500; margin-left: 4px; }
+.machine { color: var(--muted); font-size: 13px; }
+.grow { flex: 1; }
+.fresh { color: var(--faint); font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+.linkish { background: none; border: 0; padding: 2px 4px; color: var(--accent); cursor: pointer; border-radius: 6px; font-size: 15px; }
+.linkish:hover { text-decoration: underline; }
+
+/* the verdict and the sentence */
+.verdict { display: flex; gap: 14px; align-items: flex-start; padding: 8px 0 18px; }
+.dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 10px; flex: none; background: var(--faint); }
+.dot.good { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.say { font-size: 25px; line-height: 1.3; font-weight: 600; letter-spacing: -.012em; max-width: 60ch; }
+.say small { display: block; font-size: 15px; line-height: 1.5; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 4px; }
+
+/* the shelf: the GPU drawn to scale */
+.shelf { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 14px 16px 12px; box-shadow: var(--shadow); }
+.shelf-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
+.shelf-head b { color: var(--ink); font-weight: 600; }
+.bar { display: flex; gap: 3px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg { position: relative; min-width: 3px; display: flex; flex-direction: column; justify-content: center; padding: 0 10px; color: #fff; overflow: hidden; cursor: default; }
+.seg .n { font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 1px rgba(0,0,0,.18); }
+.seg .g { font-size: 12px; opacity: .92; white-space: nowrap; }
+.seg.free { background: var(--free); color: var(--free-ink); border: 1px dashed var(--rule); border-radius: 0 8px 8px 0; }
+.seg.free .n { text-shadow: none; font-weight: 600; }
+.seg.paused::after, .seg.unknown::after { content: ""; position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 9px); pointer-events: none; }
+.seg.unknown { background: var(--overflow); }
+.seg.small .n, .seg.small .g { display: none; }
+.rail { margin-top: 10px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.rail .track { flex: 1; height: 6px; background: var(--sunk); border-radius: 4px; overflow: hidden; }
+.rail .fill { height: 100%; background: var(--muted); opacity: .55; }
+.keys { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.keys:empty { display: none; }
+.keys span { display: inline-flex; gap: 6px; align-items: center; }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.swc .sw { transform: translateY(1px); }
+.sw.hatched { background-image: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 5px); }
+
+/* tabs */
+nav.tabs { display: flex; gap: 4px; margin: 22px 0 14px; border-bottom: 1px solid var(--rule); }
+nav.tabs a { padding: 8px 12px; text-decoration: none; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+nav.tabs a[aria-current="page"] { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+nav.tabs .count { font-size: 12px; color: var(--faint); margin-left: 4px; }
+
+/* sections */
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; align-items: start; }
+section { min-width: 0; }
+h2 { font-size: 16px; font-weight: 650; margin: 0 0 4px; letter-spacing: -.005em; }
+.lede { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+.stack > * + * { margin-top: 22px; }
+.muted { color: var(--muted); } .faint { color: var(--faint); }
+.hide { display: none !important; }
+
+/* alerts ("needs you") */
+.needs { display: grid; gap: 8px; margin-bottom: 18px; }
+.needs:empty { display: none; }
+.need { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--rule); }
+.need::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; transform: translateY(-1px); }
+.need.bad::before { background: var(--bad); } .need.warn::before { background: var(--warn); } .need.info::before { background: var(--accent); }
+.need b { font-weight: 650; }
+
+/* job rows */
+.jobs { border-top: 1px solid var(--rule); }
+.job { border-bottom: 1px solid var(--rule); }
+.jrow { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: baseline; padding: 12px 4px; }
+.jrow.sel { grid-template-columns: 30px 14px minmax(0, 1fr) auto auto; }
+.jrow.sel > .line2 { grid-column: 3 / -1; }
+.pick { display: flex; align-items: center; gap: 2px; }
+.pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.grip { cursor: grab; color: var(--faint); font-size: 14px; line-height: 1; padding: 0 2px; user-select: none; }
+.job.dragging { opacity: .4; }
+.job.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+.dropend { height: 28px; border: 1px dashed transparent; border-radius: 8px; margin-top: 4px; }
+.dropend.drop-before { border-color: var(--accent); }
+.job.picked { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.qbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; }
+.qbar .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.qbar .chips button { border: 1px solid var(--rule); background: var(--surface); padding: 3px 11px; border-radius: 999px; font-size: 13px; cursor: pointer; }
+.qbar .chips button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.qbar .chips .n { color: var(--faint); margin-left: 3px; }
+.qbar .chips button[aria-pressed="true"] .n { color: inherit; opacity: .7; }
+.bulk { position: sticky; top: 0; z-index: 4; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 10px; margin: 10px 0 0;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.bulk .count { font-weight: 600; margin-right: 6px; }
+.bulk select { width: auto; max-width: 220px; }
+.selall { display: flex; align-items: center; gap: 8px; padding: 8px 4px 0; font-size: 13px; color: var(--muted); }
+.selall input { width: 16px; height: 16px; margin: 0 0 0 7px; accent-color: var(--accent); }
+.jrow > .line2 { grid-column: 2 / -1; display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.jrow > .line2 > .prog { flex: 1 1 220px; max-width: 380px; }
+.jrow > .line2 > .acts { margin-left: auto; }
+.jname { font-weight: 600; overflow-wrap: anywhere; }
+.jwhy { font-size: 13px; color: var(--muted); margin-top: 1px; }
+.chip { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
+.chip.run { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good-ink); }
+.chip.paused, .chip.giving { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.chip.wait { background: var(--sunk); color: var(--ink); }
+.chip.big { background: color-mix(in srgb, var(--s4) 14%, transparent); color: var(--s4); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad-ink); }
+.chip.idea { background: transparent; border: 1px dashed var(--rule); }
+.chip.off { background: transparent; color: var(--faint); border: 1px solid var(--rule); }
+.prog { font-size: 12px; color: var(--muted); }
+.prog .t { height: 6px; background: var(--sunk); border-radius: 4px; overflow: hidden; margin-bottom: 4px; }
+.prog .f { height: 100%; background: var(--good); border-radius: 4px; }
+.prog .t.part { height: 4px; margin-top: 4px; }
+.prog .t.part .f { background: var(--faint); }
+.mem { font-size: 13px; text-align: right; white-space: nowrap; min-width: 52px; }
+.mem:empty { min-width: 0; }
+.acts { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.btn { border: 1px solid var(--rule); background: var(--surface); padding: 5px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap; font-size: 14px; }
+.btn:hover { border-color: var(--faint); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { color: var(--bad-ink); }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--accent); padding: 5px 8px; }
+.btn.icon { padding: 4px 10px; }
+.drawer { padding: 4px 4px 18px 30px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px 28px; font-size: 14px; }
+.drawer dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; }
+.drawer dt { color: var(--muted); }
+.drawer dd { margin: 0; overflow-wrap: anywhere; }
+.drawer .goal { font-size: 15px; line-height: 1.55; max-width: 72ch; }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+.codeline { display: flex; gap: 8px; align-items: center; background: var(--sunk); border-radius: 8px; padding: 4px 4px 4px 10px; }
+.codeline code { flex: 1; overflow-wrap: anywhere; }
+.recipe { background: var(--sunk); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0 0; }
+select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); max-width: 100%; }
+input[type=text], input[type=password] { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); width: 100%; }
+
+/* prod card and controls */
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; font-size: 14px; margin: 10px 0 0; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; }
+.models { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.model { border: 1px solid var(--rule); background: var(--surface); padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+.model[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; cursor: default; opacity: 1; }
+.controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 26px; }
+.control h3 { font-size: 15px; margin: 0 0 4px; font-weight: 650; }
+.control p { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.control .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.preview { font-size: 13px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.preview b { font-weight: 600; }
+.next { padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 10px 10px 0; margin-bottom: 18px; }
+
+/* jobs table */
+.strip { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: center; padding: 12px 16px; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 12px; }
+.strip .grp { display: flex; align-items: center; gap: 6px; }
+.strip .grp > b { font-weight: 600; margin-right: 4px; }
+.strip .hrs { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.strip .hrs button { border: 0; border-left: 1px solid var(--rule); background: var(--surface); padding: 5px 11px; cursor: pointer; font-size: 14px; }
+.strip .hrs button:first-child { border-left: 0; }
+.strip .hrs button:hover { background: var(--sunk); }
+.strip .state { font-size: 13px; color: var(--muted); }
+.strip .on { color: var(--s7); font-weight: 600; }
+.strip-note { width: 100%; font-size: 13px; color: var(--muted); padding-top: 8px; border-top: 1px solid var(--rule); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 10px 0 8px; }
+.toolbar .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar .chips button { border: 1px solid var(--rule); background: var(--surface); padding: 3px 11px; border-radius: 999px; font-size: 13px; cursor: pointer; }
+.toolbar .chips button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.toolbar .chips .n { color: var(--faint); margin-left: 4px; }
+.toolbar .chips button[aria-pressed="true"] .n { color: inherit; opacity: .7; }
+.toolbar .tags button { border-style: dashed; }
+.search { position: relative; display: inline-flex; align-items: center; }
+.search input { width: 240px; padding: 6px 30px 6px 10px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); }
+.search kbd { position: absolute; right: 8px; }
+kbd { font: 11.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; border: 1px solid var(--rule); border-bottom-width: 2px;
+  border-radius: 5px; padding: 0 5px; color: var(--muted); background: var(--surface); }
+.tablewrap { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
+.jt { width: 100%; border-collapse: collapse; font-size: 14px; }
+.jt th { position: sticky; top: 0; z-index: 2; background: var(--sunk); font-weight: 500; font-size: 12.5px; color: var(--muted);
+  padding: 7px 10px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+.jt th button { all: unset; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+.jt th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.jt th[aria-sort] button { color: var(--ink); font-weight: 600; }
+.jt td { padding: 9px 10px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+.jt tr:last-child td { border-bottom: 0; }
+.jt tbody tr { cursor: pointer; }
+.jt tbody tr:hover td { background: color-mix(in srgb, var(--sunk) 55%, transparent); }
+.jt tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.jt tr.cursor td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.jt tr.current td { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.jt .c-pick { width: 52px; white-space: nowrap; padding-right: 0; }
+.jt .c-pick input { width: 16px; height: 16px; margin: 0 0 0 4px; vertical-align: middle; accent-color: var(--accent); cursor: pointer; }
+.jt .c-name { min-width: 220px; }
+.jt .nm { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.jt .why { font-size: 12.5px; color: var(--muted); margin: 2px 0 0 18px; max-width: 64ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.jt .why:empty { display: none; }
+.jt tr.is-done .bar i { background: var(--faint); opacity: .55; }
+.jt .tag { font-size: 11.5px; font-weight: 500; color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 0 7px; }
+.jt .c-prog { width: 190px; font-size: 12.5px; color: var(--muted); }
+.jt .bar { height: 5px; background: var(--sunk); border-radius: 3px; overflow: hidden; margin-bottom: 3px; }
+.jt .bar i { display: block; height: 100%; background: var(--good); border-radius: 3px; }
+.jt .num { text-align: right; white-space: nowrap; font-size: 13px; }
+.jt .c-runs, .jt .c-time { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.jt .c-meta { display: none; }
+.jt .grip { cursor: grab; color: var(--faint); padding: 0 2px; user-select: none; }
+.jt tr.dragging { opacity: .4; }
+.jt tr.drop-before td { box-shadow: inset 0 3px 0 var(--accent); }
+.jt.compact .why { margin-left: 18px; }
+.hint { font-size: 13px; color: var(--muted); margin: 8px 2px 0; }
+.bulk { position: sticky; top: 8px; z-index: 5; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 10px; margin: 0 0 8px;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 10px; box-shadow: 0 6px 18px rgba(20, 30, 45, .10); }
+.bulk .count { font-weight: 600; margin-right: 6px; }
+.bulk select { width: auto; max-width: 220px; }
+/* details pane: slides up from the bottom, like a torrent client's */
+.pane { position: fixed; left: 0; right: 0; bottom: 0; height: 46vh; z-index: 10; display: flex; flex-direction: column;
+  background: var(--surface); border-top: 1px solid var(--rule); box-shadow: 0 -10px 30px rgba(20, 30, 45, .12); }
+.pane:not(.hide) { animation: paneup .14s ease-out; }
+@keyframes paneup { from { transform: translateY(24px); opacity: .6; } }
+.pane-head { display: flex; align-items: center; gap: 10px; padding: 10px max(16px, calc((100vw - 1200px) / 2 + 24px)) 6px; }
+.pane-head h2 { margin: 0; font-size: 17px; }
+.pane-tabs { display: flex; gap: 2px; padding: 0 max(16px, calc((100vw - 1200px) / 2 + 24px)); border-bottom: 1px solid var(--rule); }
+.pane-tabs button { border: 0; background: none; padding: 7px 12px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
+.pane-tabs button[aria-selected="true"] { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+.pane-body { overflow: auto; flex: 1; padding: 14px max(16px, calc((100vw - 1200px) / 2 + 24px)) 20px; }
+.pane-body .drawer { padding: 0; }
+.logbox { background: var(--sunk); border-radius: 8px; padding: 10px 12px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
+body.pane-open main, body.pane-open footer { padding-bottom: 46vh; }
+.keys-table td { padding: 4px 10px 4px 0; border: 0; font-size: 14px; }
+.tagedit { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
+.tagedit input { max-width: 320px; }
+.need { cursor: pointer; text-align: left; width: 100%; font: inherit; color: inherit; }
+.need:hover { border-color: var(--faint); }
+.need .go { margin-left: auto; color: var(--accent); white-space: nowrap; font-size: 13px; }
+.why-big { font-size: 15px; margin: 0 0 10px; }
+.fit { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.qorder { margin: 0 0 14px; padding-left: 22px; max-height: 30vh; overflow: auto; font-size: 14px; }
+.qorder li { padding: 2px 0; }
+.qorder .faint { font-size: 12.5px; }
+.jt tr.unk td { background: color-mix(in srgb, var(--overflow) 8%, transparent); }
+.linkbtn { all: unset; cursor: pointer; font-weight: 600; }
+.linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.seg.dark-ink { color: #17212b; }
+.seg.dark-ink .n { text-shadow: none; }
+.seg.mid .g { display: none; }
+.prog { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; max-width: 520px; }
+.prog .t { height: 6px; background: var(--sunk); border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
+.prog .f { height: 100%; background: var(--good); }
+.prog .t.part { height: 4px; }
+.prog .t.part .f { background: var(--faint); }
+@media (pointer: coarse) {
+  #keysbtn, .grip, .kbd-hint, .search kbd { display: none !important; }
+}
+@media (max-width: 600px) {
+  .jt .c-pick input { width: 22px; height: 22px; }
+  .jt .c-pick { padding: 6px 6px 6px 0; }
+  .toolbar .chips button { min-height: 38px; padding: 6px 13px; }
+  .strip .hrs button { padding: 9px 13px; }
+  #brakebtn { order: 9; }
+}
+.plan { margin-top: 22px; }
+.plan .ph { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.plan .box { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px 10px; margin-top: 8px; }
+.plan .axis { position: relative; height: 18px; margin-left: 0; font-size: 11.5px; color: var(--faint); }
+.plan .axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.plan .axis span:first-child { transform: none; }
+.plan .lanes { position: relative; }
+.plan .grid { position: absolute; inset: 0; pointer-events: none; }
+.plan .grid i { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+.plan .lane { position: relative; height: 30px; margin: 4px 0; }
+.plan .pb { position: absolute; top: 2px; bottom: 2px; border-radius: 6px; padding: 0 8px; display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: #fff; overflow: hidden; white-space: nowrap; min-width: 6px; cursor: pointer; }
+.plan .pb.dark-ink { color: #17212b; }
+.plan .pb.now { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); }
+.plan .pb.guess { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.22) 0 3px, transparent 3px 8px); }
+.plan .pb.unknown { background: transparent !important; border: 1.5px dashed var(--faint); color: var(--muted); font-weight: 500; }
+.plan .pb span { overflow: hidden; text-overflow: ellipsis; }
+.plan .nowline { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--accent); border-radius: 1px; }
+.plan .notes { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.plan .notes b { color: var(--ink); font-weight: 600; }
+.askbody p { margin: 0 0 10px; color: var(--muted); font-size: 14px; max-width: 60ch; }
+.askbody ul { margin: 0 0 10px; padding-left: 20px; font-size: 14px; max-height: 30vh; overflow: auto; }
+#askok.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.livedot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-right: 5px; vertical-align: 1px; }
+.sumbox { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--rule));
+  border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; }
+.sumbox pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.5; }
+/* charts */
+.chart { position: relative; }
+svg { display: block; width: 100%; }
+svg text { fill: var(--faint); font-size: 11px; }
+.grid line { stroke: var(--rule); }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font-size: 12px; display: none; min-width: 170px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+.tip .r { display: flex; justify-content: space-between; gap: 14px; }
+.range { display: inline-flex; gap: 2px; }
+.range button { border: 1px solid var(--rule); background: var(--surface); padding: 2px 9px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.range button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.headrow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+
+/* history */
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+.filters button { border: 1px solid var(--rule); background: var(--surface); padding: 3px 11px; border-radius: 999px; font-size: 13px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; overflow-wrap: anywhere; }
+td.n, th.n { text-align: right; white-space: nowrap; }
+tr.problem td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+.prose p { max-width: 72ch; margin: 0 0 12px; }
+.prose h3 { font-size: 15px; margin: 22px 0 6px; }
+dialog { border: 1px solid var(--rule); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 18px; width: min(420px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(10, 15, 20, .45); }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 10px; font-size: 14px; display: none; z-index: 20; max-width: calc(100vw - 32px); }
+.toast.err { background: var(--bad); color: #fff; cursor: pointer; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+footer { color: var(--faint); font-size: 12px; padding: 40px 0 30px; }
+
+@media (max-width: 900px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .controls { grid-template-columns: minmax(0, 1fr); }
+  #prodcol { order: -1; }
+  .jrow > .line2 > .acts { margin-left: 0; }
+  .prog:empty { display: none; }
+  .drawer { grid-template-columns: minmax(0, 1fr); padding-left: 4px; }
+}
+@media (max-width: 760px) {
+  .jt thead { display: none; }
+  .jt, .jt tbody, .jt tr, .jt td { display: block; width: auto; }
+  .jt tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 8px; padding: 10px 8px; border-bottom: 1px solid var(--rule); }
+  .jt td { border: 0; padding: 0; }
+  .jt .c-pick { grid-row: 1 / span 2; width: auto; }
+  .jt .c-name { grid-column: 2; min-width: 0; }
+  .jt .c-status { grid-column: 3; grid-row: 1; }
+  .jt .c-prog { grid-column: 2 / -1; width: auto; }
+  .jt .c-speed, .jt .c-gpu, .jt .c-runs, .jt .c-time { display: none; }
+  .jt .c-meta { display: block; grid-column: 2 / -1; font-size: 12.5px; color: var(--muted); }
+  .jt .c-meta:empty { display: none; }
+  .pane-head { flex-wrap: wrap; }
+  .pane-head .grow { display: none; }
+  .pane-head h2 { flex: 1 1 0; min-width: 0; }
+  .pane-head .acts { order: 9; flex-basis: 100%; justify-content: flex-start; }
+  .search input { width: 100%; }
+  .search { flex: 1 1 100%; }
+  .pane { height: 100%; top: 0; }
+  body.pane-open main, body.pane-open footer { padding-bottom: 0; }
+}
+@media (max-width: 600px) {
+  .wrap { padding: 0 16px; }
+  .say { font-size: 20px; }
+  .bar { height: 54px; }
+  .btn { padding: 8px 12px; }
+  nav.tabs { overflow-x: auto; }
+  .jrow { grid-template-columns: 14px minmax(0, 1fr) auto; }
+  .jrow > .jchip { grid-column: 2; grid-row: 2; }
+  .jrow.sel { grid-template-columns: 30px 14px minmax(0, 1fr) auto; }
+  .jrow.sel > .jchip { grid-column: 3; grid-row: 2; }
+  .jrow.sel > .line2 { grid-column: 3 / -1; }
+}
+@media (prefers-reduced-motion: reduce) { .pane:not(.hide) { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <span class="brand">GapRunner<span class="ver" id="ver"></span></span>
+    <span class="machine" id="machine"></span>
+    <span class="grow"></span>
+    <button class="linkish" id="keysbtn" title="Keyboard shortcuts (?)">Shortcuts</button>
+    <span class="fresh"><span id="age"></span><button class="linkish" id="refreshbtn" title="Refresh now" aria-label="Refresh now">↻</button></span>
+    <button class="btn danger" data-brake="1" id="brakebtn" title="The emergency brake: every job steps aside, prod stays awake, nothing starts">Prod only</button>
+    <button class="btn" id="pinbtn">Unlock</button>
+  </div>
+
+  <div class="verdict" role="status" aria-live="polite">
+    <span class="dot" id="dot"></span>
+    <div class="say" id="say">Connecting to GapRunner…</div>
+  </div>
+
+  <div class="shelf" id="shelf">
+    <div class="shelf-head"><span><b>GPU memory</b> <span id="shelfsub"></span></span><span id="shelfright"></span></div>
+    <div class="bar" id="bar" role="img" aria-label="GPU memory by holder"></div>
+    <div class="keys" id="keys"></div>
+    <div class="rail" id="rail"><span>CPU memory</span><div class="track"><div class="fill" id="railfill"></div></div><span id="railtext"></span></div>
+  </div>
+
+  <div class="needs" id="needs" style="margin-top:14px"></div>
+  <nav class="tabs" id="tabs" aria-label="Sections">
+    <a href="#now">Now</a><a href="#jobs">Jobs<span class="count" id="jobcount"></span></a><a href="#history">History</a><a href="#help">Help</a>
+  </nav>
+
+  <main>
+    <section data-tab="now">
+      <div class="cols">
+        <div class="stack">
+          <section>
+            <h2>On the GPU and up next</h2>
+            <p class="lede">What is using the GPU right now and what starts next. The whole queue is under Jobs.</p>
+            <div class="tablewrap"><table class="jt compact" aria-label="On the GPU and up next"><tbody id="nowjobs"></tbody></table></div>
+            <p class="hint" id="nowhint"></p>
+            <p class="hint" id="nowplan"></p>
+          </section>
+          <section>
+            <div class="headrow"><h2>GPU memory over time</h2>
+              <span class="range" id="range"><button data-s="3600" aria-pressed="true">1 h</button><button data-s="21600">6 h</button><button data-s="86400">24 h</button><button data-s="604800">7 d</button></span></div>
+            <p class="lede">Who held the GPU, and when prod was answering.</p>
+            <div class="chart"><svg id="tide" height="250" role="img" aria-label="GPU memory over time"></svg><div class="tip" id="tidetip"></div></div>
+            <div class="keys" id="tidekeys"></div>
+          </section>
+        </div>
+        <aside class="stack" id="prodcol"></aside>
+      </div>
+    </section>
+
+    <section data-tab="jobs" class="hide">
+      <div class="strip" id="controls"></div>
+      <section class="plan" id="plan" aria-label="Coming up"></section>
+      <div class="headrow" style="margin-top:22px"><h2>Job queue</h2><span class="muted" id="upnext" style="font-size:13px"></span></div>
+      <div class="toolbar">
+        <div class="chips" id="qfilters" role="group" aria-label="Show"></div>
+        <div class="chips tags" id="tagchips" role="group" aria-label="Tags"></div>
+        <span class="grow"></span>
+        <label class="search"><span class="sr">Search jobs</span><input type="search" id="qsearch" placeholder="Search jobs, tags, reasons" autocomplete="off"><kbd>/</kbd></label>
+        <button class="btn quiet hide" id="clearfin"></button>
+      </div>
+      <div class="bulk hide" id="bulk" role="toolbar" aria-label="Selected jobs"></div>
+      <div class="tablewrap"><table class="jt" id="jt" aria-label="Job queue"><thead id="jth"></thead><tbody id="queue"></tbody></table></div>
+      <p class="hint" id="qhint"></p>
+      <form id="addform" class="hide" style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+        <label class="sr" for="addname">Idea name</label>
+        <input type="text" id="addname" placeholder="Add an idea, e.g. evaluate model X on benchmark Y" maxlength="120" style="flex:2;min-width:220px">
+        <label class="sr" for="addnotes">Notes</label>
+        <input type="text" id="addnotes" placeholder="Notes (optional)" maxlength="500" style="flex:3;min-width:220px">
+        <button class="btn primary">Add idea</button>
+      </form>
+      <section style="margin-top:30px">
+        <h2>Unknown GPU use</h2>
+        <p class="lede">Processes on the GPU that aren't prod or a job. GapRunner shows them and never touches them. To manage one, give it a recipe or add it as a claim (see Help).</p>
+        <div id="stow"></div>
+      </section>
+    </section>
+
+    <section data-tab="history" class="hide">
+      <div class="cols">
+        <section>
+          <h2>What happened</h2>
+          <div class="filters" id="filters"></div>
+          <table id="events"></table>
+        </section>
+        <aside class="stack">
+          <section class="panel">
+            <h2>Last 24 hours</h2>
+            <table id="sum" style="margin-top:6px"></table>
+          </section>
+          <section class="panel">
+            <h2>How long prod stays quiet</h2>
+            <p class="lede" id="survsub"></p>
+            <div class="chart"><svg id="surv" height="200" role="img" aria-label="Chance prod stays quiet"></svg></div>
+            <p class="lede" style="margin:8px 0 0">Chance prod stays quiet 30 s more, given how long it has been quiet. Each job waits for its own amount of quiet, shown in its waiting reason.</p>
+          </section>
+          <section class="panel">
+            <h2>Step-aside and come-back times</h2>
+            <p class="lede">Median of the last real ones; "recipe guess" until measured.</p>
+            <table id="costs"></table>
+          </section>
+          <section class="panel">
+            <h2>Settings</h2>
+            <table id="policy"></table>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section data-tab="help" class="hide prose">
+      <h2>How GapRunner works</h2>
+      <p><b>Prod comes first.</b> Prod is the always-on model GapRunner protects. When prod has been quiet for a while and a job can use the time, GapRunner puts prod to sleep (its weights move to CPU memory). The next request waits at the door while jobs step aside and prod wakes (typically a second or two), then it's answered as usual. Normally, only jobs that can step aside within a few seconds (the "most a request may wait" setting) run while prod sleeps; a job that gets stuck stepping aside is stopped hard after a short deadline, so prod can wake. During <b>slow-wake prod</b> a request may wait as long as a slow job takes to step aside.</p>
+      <p><b>Jobs use what prod isn't using.</b> A job that fits beside prod runs alongside it; one that gives way pauses for a moment whenever prod is answering. A job that needs prod's memory runs only while prod sleeps, and only when the quiet is likely to last long enough to be worth it, learned from prod's own history.</p>
+      <p><b>Slow-wake prod</b> is a period you open (1, 3 or 8 hours) when jobs that are slow to step aside may run while prod sleeps. Prod still answers, but a request may wait as long as such a job takes to step aside. <b>No prod</b> stops prod for the period so jobs get the whole GPU, and starts it again when the period ends. Jobs set to "only during slow-wake prod" run in either.</p>
+      <h3>Buttons on a job</h3>
+      <p><b>Start</b> lets it run as soon as there's room. <b>Queue</b> lines it up behind another job: it starts by itself once that job finishes with no errors (a job's Details can change or clear what it waits for). <b>Wind down</b> stops it at its next saved point when its recipe can say when its work is saved (<code>saved_cmd</code>); otherwise it finishes its current run, which for long training can take days. Either way it won't start again until Start or Queue. <b>Stop</b> ends it now; a resumable job continues from its last checkpoint when you Start it again. <b>Pause</b> stops it exactly where it is, keeping its memory, and <b>Resume</b> continues from the same instant: nothing is lost, but its GPU memory stays in use. <b>Measure</b> runs it briefly to fill in its memory and its step-aside and come-back times.</p>
+      <p><b>Many jobs at once:</b> tick jobs in the queue (shift-click for a range, or Select all) and act on all of them. <b>Queue in order</b> makes each start when the one before it finishes, in the order shown. Drag ⠿ to reorder. <b>Clear</b> hides finished jobs under Cleared; Start brings one back. The chips above the queue filter it; Active hides done and cleared jobs.</p>
+      <p><b>Runs:</b> alongside prod, alongside prod giving way, only while prod sleeps, or only during slow-wake prod (or no prod).</p>
+      <h3>What a job is doing</h3>
+      <p>Running, giving way (paused for a moment while prod answers), paused (by you), starting, queued (waits for another job to finish), waiting (with the reason), winding down, wound down, waits for slow-wake prod, idea (not set up to run yet), done, failed (not retried), stuck (running but not progressing).</p>
+      <h3>Prod</h3>
+      <p>Answering, awake, asleep (wakes on the next request, typically in a second or two), off, starting, switching. A service can have several models; <b>Switch</b> stops the current one, freeing its GPU and CPU memory, and starts the other. Jobs can require a model and step aside when it stops serving.</p>
+      <h3>Whole system</h3>
+      <p><b>Prod only</b> is the emergency brake: prod stays awake, every running job steps aside, nothing starts until you end it. <b>Wind down all</b> does Wind down on every running job and starts nothing new. <b>Unknown GPU use</b> is memory held by processes that aren't prod or a job. A <b>claim</b> in the config tells GapRunner about work started by hand, so it counts that memory (shown as "claim") or starts nothing while it runs. Every job has its own link: <code>#jobs/&lt;job name&gt;</code> opens its details, <code>/log</code> after it opens the log.</p>
+      <h3>Memory</h3>
+      <p>The shelf at the top is the GPU drawn to scale; striped blocks are paused or unknown. Every job says what it expects to use in GPU memory, CPU memory and disk, and its details show what it actually uses next to that. GPU memory comes from the driver, never from a job's own report.</p>
+      <h3>Changes</h3>
+      <p>Anyone can look; changes need the PIN (Unlock). Times are shown in your browser's time zone. More in README, docs/RECIPES.md and docs/AGENT-GUIDE.md in the GapRunner repository.</p>
+    </section>
+  </main>
+  <footer id="foot"></footer>
+</div>
+
+<dialog id="pindlg"><form method="dialog">
+  <p style="margin-top:0">Enter the PIN to make changes from this browser.</p>
+  <label class="sr" for="pin">PIN</label>
+  <input type="password" id="pin" autocomplete="current-password" inputmode="numeric">
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok">Unlock</button></div>
+</form></dialog>
+<dialog id="qdlg"><form method="dialog">
+  <h2 style="margin:0 0 4px" id="qtitle">Queue</h2>
+  <p class="lede" style="margin:0 0 14px">It starts by itself once the job it waits for finishes with no errors. If that job fails, it keeps waiting and says why.</p>
+  <ol class="qorder" id="qorder"></ol>
+  <label for="qafter" style="font-size:13px" class="muted">Start after</label>
+  <select id="qafter" style="width:100%;margin:4px 0 12px"></select>
+  <label for="qruns" style="font-size:13px" class="muted">Where it runs</label>
+  <select id="qruns" style="width:100%;margin:4px 0 4px"></select>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok">Queue</button></div>
+</form></dialog>
+<aside class="pane hide" id="pane" aria-label="Job details">
+  <header class="pane-head">
+    <span id="panesw"></span><h2 id="panetitle"></h2><span id="panechip"></span>
+    <span class="grow"></span><span class="acts" id="paneacts"></span>
+    <button class="btn quiet icon" id="paneclose" aria-label="Close details (Esc)" title="Close (Esc)">×</button>
+  </header>
+  <nav class="pane-tabs" id="panetabs" role="tablist"></nav>
+  <div class="pane-body" id="panebody"></div>
+</aside>
+<dialog id="askdlg" aria-labelledby="asktitle"><form method="dialog">
+  <h2 id="asktitle" style="margin:0 0 8px;font-size:17px"></h2>
+  <div id="askbody" class="askbody"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn" value="cancel">Cancel</button><button class="btn primary" id="askok" value="ok"></button></div>
+</form></dialog>
+<dialog id="keysdlg"><form method="dialog">
+  <h2 style="margin:0 0 10px">Keyboard</h2>
+  <table class="keys-table">
+    <tr><td><kbd>/</kbd></td><td>search the queue</td></tr>
+    <tr><td><kbd>j</kbd> <kbd>k</kbd> or <kbd>↓</kbd> <kbd>↑</kbd></td><td>move between jobs</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>open the job's details</td></tr>
+    <tr><td><kbd>x</kbd></td><td>select or deselect the job</td></tr>
+    <tr><td><kbd>a</kbd></td><td>select all shown</td></tr>
+    <tr><td><kbd>s</kbd></td><td>Start</td></tr>
+    <tr><td><kbd>q</kbd></td><td>Queue in order</td></tr>
+    <tr><td><kbd>w</kbd></td><td>Wind down</td></tr>
+    <tr><td><kbd>p</kbd></td><td>Pause or Resume</td></tr>
+    <tr><td><kbd>c</kbd></td><td>Clear</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>close details, clear search, deselect</td></tr>
+    <tr><td><kbd>1</kbd>–<kbd>4</kbd></td><td>Now, Jobs, History, Help</td></tr>
+  </table>
+  <p class="muted" style="font-size:13px;margin:12px 0 0">Actions apply to the selected jobs, or to the highlighted one when nothing is selected.</p>
+  <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" value="ok">Close</button></div>
+</form></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const SLOTS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8'];
+let HISTALL = false, PAST = {};
+let S = null, RANGE = 3600, HIST = [], ACT = [], SUM = null, EVENTS = [], EVF = 'all', lastOk = 0, timer = null;
+const OPEN = new Set(), PICK = new Set();
+let QF = (() => { try { return localStorage.getItem('gaprunner.qf') || 'active'; } catch (e) { return 'active'; } })(), LASTPICK = null, DRAG = null;
+function catOf(n) {
+  const q = qOf(n), j = S.jobs[n];
+  if (!j) return 'idea';
+  if (q && q.archived) return 'cleared';
+  if (j.word === 'done') return 'done';
+  if (j.word === 'failed') return 'failed';
+  if (j.state === 'hot' || j.frozen) return 'running';
+  if (j.hold || j.word === 'held') return 'wound';
+  if (j.word === 'window') return 'big';
+  return 'queued';
+}
+const QFILTERS = [['active', 'Active', c => !['done', 'cleared'].includes(c)], ['running', 'Running', c => c === 'running'],
+  ['queued', 'Queued', c => c === 'queued'], ['big', 'Slow-wake prod', c => c === 'big'], ['wound', 'Wound down', c => c === 'wound'], ['done', 'Done', c => c === 'done'],
+  ['failed', 'Failed', c => c === 'failed'], ['idea', 'Ideas', c => c === 'idea'], ['cleared', 'Cleared', c => c === 'cleared'], ['all', 'All', () => true]];
+const shown = () => { const f = (QFILTERS.find(x => x[0] === QF) || QFILTERS[0])[2];
+  const l = S.queue.map(q => q.name).filter(n => f(catOf(n)));
+  return [...l.filter(n => S.jobs[n]), ...l.filter(n => !S.jobs[n])];                  // ideas after runnable jobs
+};
+let PIN = (() => { try { return localStorage.getItem('gaprunner.pin') || ''; } catch (e) { return ''; } })();
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const tm = t => new Date(t * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+const tmd = t => new Date(t * 1000).toDateString() === new Date().toDateString() ? tm(t) : new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+const dur = s => s == null ? '–' : s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+const ago = t => t ? dur(Date.now() / 1000 - t) + ' ago' : '';
+const gib = g => g == null ? '–' : `${g >= 10 ? Math.round(g) : (+g).toFixed(1)} GiB`;
+const tok = v => v == null ? '–' : v >= 10000 ? `${Math.round(v / 1000)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
+const speedText = t => !t ? '' : t.out == null && t.in == null ? '' : `${tok(t.out)} tokens/s out, ${tok(t.in)} in`;
+const secs = x => x == null ? '–' : x < 10 ? `${(+x).toFixed(x < 1 ? 2 : 1)} s` : dur(x);
+function engineRows(x) {
+  // what the server itself reports: load, speed (or what it last did when idle), latency, caches; missing = left out
+  const t = x.tps, tl = x.tps_last, st = x.stats || {}, rows = [];
+  if (st.running != null) rows.push(['Load', `${Math.round(st.running)} answering, ${Math.round(st.waiting || 0)} waiting` + (st.kv != null ? `; KV cache ${pct(st.kv)} full` : '')]);
+  const busy = t && ((t.out || 0) > 0 || (t.in || 0) > 0);
+  if (busy) rows.push(['Speed', `${tok(t.out)} tokens/s out, ${tok(t.in)} fresh prompt tokens/s in` + (st.cached_share != null ? ` <span class="faint">(${pct(st.cached_share)} of prompt tokens from cache)</span>` : '') + ` <span class="faint">(last ${t.window_s} s)</span>`]);
+  else if (tl) rows.push(['Speed', `idle now <span class="faint">(last busy ${tm(tl.t)}: ${tok(tl.out)} tokens/s out)</span>`]);
+  else if (t) rows.push(['Speed', 'idle now']);
+  if (st.ttft_s != null) rows.push(['Latency', `first token in ${secs(st.ttft_s)}, whole answer ${secs(st.e2e_s)} <span class="faint">(average of ${Math.round(st.requests || 0)} request${st.requests === 1 ? '' : 's'}, last ${dur(st.window_s)})</span>`]);
+  if (st.prefix_hit != null) rows.push(['Prefix cache', `${pct(st.prefix_hit)} of lookups hit`]);
+  if (st.spec_accept != null) rows.push(['Drafting', `${pct(st.spec_accept)} of drafted tokens accepted`]);
+  else if (st.spec_len != null) rows.push(['Drafting', `${(+st.spec_len).toFixed(2)} tokens accepted per step`]);
+  return rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+const pct = p => p == null ? '–' : `${Math.round(p * 100)}%`;
+// the protected service's configured name (one or more), for the page's own words; job names are never rewritten
+const SV = () => (S && Object.keys(S.services).join(' and ')) || 'prod';
+const SVC = () => SV().charAt(0).toUpperCase() + SV().slice(1);
+let LOCALIZED = 'prod';
+function localize() {
+  // translate the page's fixed text (help, headings, labels and the tables above) once the name is known; it runs
+  // before the first render, so only the page's own words are touched, never job names
+  if (!S || SV() === LOCALIZED) return;
+  const from = new RegExp(`\\b${LOCALIZED}\\b`, 'g'), fromC = new RegExp(`\\b${LOCALIZED.charAt(0).toUpperCase() + LOCALIZED.slice(1)}\\b`, 'g');
+  const tr = t => String(t).replace(from, SV()).replace(fromC, SVC());
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n; (n = w.nextNode());) n.nodeValue = tr(n.nodeValue);
+  for (const el of document.querySelectorAll('[title],[aria-label]')) for (const a of ['title', 'aria-label']) if (el.hasAttribute(a)) el.setAttribute(a, tr(el.getAttribute(a)));
+  for (const t of [QFILTERS, RUNS]) for (const r of t) r[1] = tr(r[1]);
+  for (const k in RUNSHORT) RUNSHORT[k] = tr(RUNSHORT[k]);
+  for (const k in EV) EV[k][0] = tr(EV[k][0]);
+  LOCALIZED = SV();
+}
+const qOf = n => S.queue.find(q => q.name === n);
+
+// In-app confirm: the question is the first paragraph; the button says what it does ("Stop", "Pause"...)
+function askDlg(msg) {
+  const [title, ...rest] = String(msg).split('\n\n');
+  const label = (() => {
+    const t = title.replace(/^["“]/, '');
+    if (/^"[^"]+" is running/.test(title)) return 'Change it';
+    if (/^No .+ for [\d.]+ h\?$/.test(title)) return `Stop ${SV()}`;
+    const m = new RegExp(`^(Wind down all|${SVC()} only|Wind these down|Stop|Pause|Measure|Remove|Wind down|Switch|Start)`).exec(t);
+    return m ? (m[1] === 'Wind these down' ? 'Wind down' : m[1]) : 'Continue';
+  })();
+  $('#asktitle').textContent = title;
+  $('#askbody').innerHTML = rest.map(p => p.startsWith('  ') ? `<ul>${p.split('\n').map(x => `<li>${esc(x.trim())}</li>`).join('')}</ul>` : `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
+  const ok = $('#askok'); ok.textContent = label; ok.className = 'btn ' + (new RegExp(`^(Stop|${SVC()} only|Remove)`).test(label) ? 'danger' : 'primary');
+  const d = $('#askdlg');
+  return new Promise(res => { d.onclose = () => res(d.returnValue === 'ok'); d.returnValue = ''; d.showModal(); ok.focus(); });
+}
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.style.display = 'block';
+  clearTimeout(t._h);
+  if (!err) t._h = setTimeout(() => t.style.display = 'none', 3500);
+}
+$('#toast').onclick = () => { $('#toast').style.display = 'none'; };
+
+// ---------- data ----------
+async function get(path) { const r = await fetch(path, {cache: 'no-store'}); if (!r.ok) throw new Error(r.status); return r.json(); }
+async function post(body) {
+  const r = await fetch('api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...body, pin: PIN})});
+  return [r.status, await r.json().catch(() => ({}))];
+}
+function store(v) { try { v ? localStorage.setItem('gaprunner.pin', v) : localStorage.removeItem('gaprunner.pin'); } catch (e) {} }
+let INFLIGHT = 0, ACTSEQ = 0;
+async function action(body) {
+  if (!PIN && !(await askPin())) return;
+  // show the change at once (like a desktop app); put it back if the server says no
+  const before = S ? JSON.stringify(S) : null;
+  INFLIGHT++; ACTSEQ++;
+  try {
+    if (S) { try { optimistic(body); render(); } catch (e) {} }
+    let [code, j] = await post(body);
+    if (code === 403 && /PIN/i.test(j.error || '')) {           // wrong or stale PIN: ask again, then retry once
+      PIN = ''; store('');
+      if (!(await askPin())) { if (before) { S = JSON.parse(before); render(); } return; }
+      [code, j] = await post(body);
+    }
+    if (!j.ok && before) { S = JSON.parse(before); render(); }
+    toast(j.ok ? j.did : (j.error || `That didn't work (${code}); nothing changed`), !j.ok);
+  } catch (e) {
+    if (before) { S = JSON.parse(before); render(); }
+    toast(`Couldn't reach GapRunner (${e.message}); nothing changed`, true);
+  } finally { INFLIGHT--; ACTSEQ++; }
+  await refresh(false); refreshSlow();
+}
+function optimistic(b) {
+  // the page's best guess of what the server will report; the next refresh replaces it with the truth
+  const now = Date.now() / 1000, J = n => S.jobs[n], Q = n => qOf(n);
+  const startJ = n => { const j = J(n), q = Q(n); if (q) Object.assign(q, {hold: false, archived: false}); if (!j) return;
+    Object.assign(j, {hold: false, result: null}); if (j.state !== 'hot') Object.assign(j, (j.after || []).length ? {word: 'blocked'} : {word: 'next', why: "starting when there's room"}); };
+  const windJ = n => { const j = J(n), q = Q(n); if (q) q.hold = true; if (!j) return; j.hold = true;
+    if (j.state !== 'hot') Object.assign(j, {word: 'held', why: 'wound down: press Start to let it run'}); };
+  const set = (n, k, v) => { if (J(n)) J(n)[k] = v; if (Q(n)) Q(n)[k] = v; };
+  switch (b.action) {
+    case 'set':
+      if (b.field === 'hold') (b.value ? windJ : startJ)(b.name);
+      else if (b.field === 'tags') set(b.name, 'tags', String(b.value).split(',').map(x => x.trim().toLowerCase()).filter(Boolean));
+      else if (b.field === 'after') set(b.name, 'after', b.value ? [b.value] : []);
+      else set(b.name, b.field, b.value);
+      break;
+    case 'freeze': if (J(b.name)) Object.assign(J(b.name), {frozen: true, frozen_since: now}); break;
+    case 'thaw': if (J(b.name)) J(b.name).frozen = false; break;
+    case 'stop': if (J(b.name)) Object.assign(J(b.name), {state: 'parked', frozen: false, hold: true, word: 'held', why: 'stopped; press Start to run it again'}); if (Q(b.name)) Q(b.name).hold = true; break;
+    case 'queue': startJ(b.name); if (b.after && J(b.name)) Object.assign(J(b.name), {after: [b.after], word: 'blocked', why: `waiting for ${b.after} to finish`}); break;
+    case 'chain': { let prev = b.after || null;
+      for (const n of b.names) { startJ(n); const j = J(n); if (j) { j.after = prev ? [prev] : []; if (prev && j.state !== 'hot') Object.assign(j, {word: 'blocked', why: `waiting for ${prev} to finish`}); } prev = n; }
+      break; }
+    case 'archive': if (Q(b.name)) Object.assign(Q(b.name), {archived: true, hold: true}); if (J(b.name)) J(b.name).hold = true; break;
+    case 'unarchive': if (Q(b.name)) Q(b.name).archived = false; break;
+    case 'move': { const i = S.queue.findIndex(q => q.name === b.name); if (i < 0) break; const [e] = S.queue.splice(i, 1);
+      const k = b.dir === 'top' ? 0 : b.dir === 'bottom' ? S.queue.length : b.dir === 'up' ? Math.max(0, i - 1) : Math.min(S.queue.length, i + 1); S.queue.splice(k, 0, e); break; }
+    case 'reorder': { const by = Object.fromEntries(S.queue.map(q => [q.name, q])), rest = S.queue.filter(q => !b.names.includes(q.name));
+      const k0 = rest.findIndex(q => q.name === b.before), k = k0 < 0 ? rest.length : k0;
+      S.queue = [...rest.slice(0, k), ...b.names.map(n => by[n]).filter(Boolean), ...rest.slice(k)]; break; }
+    case 'remove': S.queue = S.queue.filter(q => q.name !== b.name); break;
+    case 'pause': S.paused = true; break;
+    case 'unpause': S.paused = false; break;
+    case 'drain': S.draining = true; break;
+    case 'undrain': S.draining = false; break;
+    case 'bulk': {
+      const one = {start: 'set:hold:false', winddown: 'set:hold:true', stop: 'stop', pause: 'freeze', resume: 'thaw', clear: 'archive', unclear: 'unarchive', remove: 'remove'}[b.op];
+      if (one) b.names.forEach(n => { const [a, f, v] = one.split(':'); optimistic(f ? {action: a, name: n, field: f, value: v === 'true'} : {action: a, name: n}); });
+      if (b.op === 'runs') b.names.forEach(n => { set(n, 'window_only', b.value === 'big'); if (b.value !== 'big') set(n, 'coexist', b.value); });
+      if (b.op === 'top' || b.op === 'bottom') optimistic({action: 'reorder', names: b.names, before: b.op === 'top' ? (S.queue.find(q => !b.names.includes(q.name)) || {}).name : ''});
+      break; }
+  }
+}
+function askPin() {
+  return new Promise(res => {
+    const d = $('#pindlg'); $('#pin').value = '';
+    d.onclose = async () => {
+      const v = $('#pin').value.trim();
+      if (d.returnValue !== 'ok' || !v) return res(false);
+      PIN = v;
+      const [code] = await post({action: 'check'});
+      if (code === 200) { store(v); toast('Unlocked: you can make changes from this browser'); render(); return res(true); }
+      PIN = ''; toast(code === 403 ? 'Wrong PIN' : `Couldn't check the PIN (${code})`, true); render(); res(false);
+    };
+    d.showModal();
+  });
+}
+function transitional() {
+  if (!S) return false;
+  return Object.values(S.services).some(v => v.switching || ['parking', 'resuming', 'starting'].includes(v.state)) ||
+    Object.values(S.jobs).some(j => j.calibrating || ['next', 'parking', 'resuming'].includes(j.word));
+}
+const LIVE_MS = 2000, SLOW_MS = 30000;          // status every 2 s while the page is in view; history, events and runs every 30 s
+let lastSlow = 0;
+async function refresh(slowToo) {
+  clearTimeout(timer);
+  const seq = ACTSEQ;
+  try {
+    const fresh = await get('api/status');
+    const first = !S;
+    if (!INFLIGHT && seq === ACTSEQ) { S = fresh; lastOk = Date.now(); }     // never overwrite a click that's still on its way
+    if (first && location.hash.includes('/')) setTimeout(showTab, 0);          // a link to a job (#jobs/<name>) opens it once data is in
+    if (S.gpu && S.t && (!HIST.length || S.t - HIST[HIST.length - 1].t >= 4)) {   // the memory chart moves with every update
+      HIST.push({t: S.t, used: S.gpu.used_gib, total: S.gpu.total_gib, h: {...S.holders}, stow: unkGib()});
+      while (HIST.length && HIST[0].t < S.t - RANGE) HIST.shift();
+    }
+    if (slowToo || Date.now() - lastSlow > SLOW_MS) await refreshSlow(true);
+    render();
+  } catch (e) { offline(); }
+  timer = setTimeout(() => refresh(false), document.hidden ? 300000 : LIVE_MS);
+}
+let TICK = 0;
+async function refreshSlow(quiet) {
+  lastSlow = Date.now();
+  try {
+    [HIST, ACT, SUM, EVENTS, PAST] = await Promise.all([get(`api/history?s=${RANGE}`), get(`api/activity?s=${RANGE}`), get('api/summary?s=86400'), get('api/events?n=400'), get('api/runs').catch(() => ({}))]);
+    if (!quiet && S) render();
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
+
+// ---------- words ----------
+const unkGib = () => (S.stowaways || []).reduce((t, p) => t + p.gib, 0);
+const claimGib = () => Object.entries(S.holders).filter(([k]) => k.startsWith('claim: ')).reduce((t, [, v]) => t + v, 0);
+const curTab = () => { const id = (location.hash || '#now').slice(1).split('/')[0]; return ['now', 'jobs', 'history', 'help'].includes(id) ? id : 'now'; };
+function procLabel(p) {
+  // "alice: python search.py" from "/srv/.../bin/python -u /srv/.../search.py --x": the program and the script it runs
+  const t = (p.cmd || p.name || '').split(/\s+/).filter(Boolean), base = x => x.split('/').pop();
+  const script = t.slice(1).find(x => /\.(py|sh|js)$/.test(x));
+  return `${p.user || '?'}: ${t.length ? base(t[0]) : p.name}${script ? ' ' + base(script) : ''}`;
+}
+function serverText(v) {
+  return `port ${v.port}${v.models.length ? `: ${v.models.join(', ')}` : v.needs_key ? ': an OpenAI-style server (needs a key)' : ''}${v.owner ? ` (${v.owner})` : ''}`;
+}
+function owners() {
+  const g = {};
+  for (const p of S.stowaways || []) { const k = procLabel(p); g[k] = (g[k] || 0) + p.gib; }
+  return Object.entries(g).sort((a, b) => b[1] - a[1]);
+}
+function roomInfo() {
+  // GPU memory a job waiting for slow-wake prod would get, with prod asleep (slow-wake prod) or stopped (no prod)
+  const total = S.gpu ? S.gpu.total_gib : 0, reserve = S.policy.reserve_gib || 0;
+  const big = Object.entries(S.jobs).filter(([n, j]) => runsOf(qOf(n), j) === 'big');
+  const using = Object.entries(S.jobs).filter(([n]) => (S.holders[n] || 0) > 0.05 && !big.find(b => b[0] === n));
+  const usingGib = using.reduce((t, [n]) => t + S.holders[n], 0), other = unkGib() + claimGib();
+  const prodAsleep = Object.values(S.services).reduce((t, v) => t + ((v.parked || {}).hbm_gib || 0), 0);
+  return {big, using, other, bigRoom: total - reserve - prodAsleep - usingGib - other, offRoom: total - reserve - usingGib - other};
+}
+function holderOrder() {
+  if (!S) return [];
+  return [...Object.keys(S.services), ...S.queue.map(q => q.name).filter(n => S.jobs[n]), ...Object.keys(S.jobs).filter(n => !qOf(n))];
+}
+function color(name) {
+  const base = S && Object.keys(S.services).find(sv => name === sv || name.startsWith(sv + ': ')) || name;   // "prod: glm" draws as prod
+  const i = holderOrder().indexOf(base);
+  return i >= 0 ? `var(${SLOTS[i % SLOTS.length]})` : 'var(--overflow)';
+}
+function inkFor(c) {
+  // dark or white label text on a coloured block, by the block's lightness
+  const m = /var\((--[\w-]+)\)/.exec(c), hex = (m ? css(m[1]) : c).replace('#', '');
+  if (hex.length !== 6) return '';
+  const [R, G, B] = [0, 2, 4].map(i => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B > 0.24 ? 'dark-ink' : '';
+}
+function prodWord(v) {
+  if (v.switching) return ['switching', 'giving'];
+  if (v.warming_s != null && v.state === 'hot') return [v.inflight ? 'answering, warming up' : 'warming up', 'run'];
+  return ({hot: v.inflight ? ['answering', 'run'] : ['awake', 'run'], parked: ['asleep', 'paused'], parking: ['falling asleep', 'paused'],
+    resuming: ['waking', 'paused'], stopped: ['off', 'off'], starting: ['starting', 'wait'], unknown: ['not answering', 'bad']})[v.state] || [v.state, 'wait'];
+}
+function jobWord(j) {
+  if (j.frozen) return ['paused', 'paused'];
+  if (j.word === 'running' && j.paused) return ['giving way', 'giving'];
+  if (j.word === 'held' || (j.hold && j.state === 'hot')) return j.state === 'hot' ? ['winding down', 'run'] : ['wound down', 'wait'];
+  if (j.word === 'blocked' && (j.after || []).length) return ['queued', 'wait'];
+  return ({running: ['running', 'run'], next: ['starting', 'run'], waiting: ['waiting', 'wait'], window: [`waits for slow-wake ${SV()}`, 'big'],
+    blocked: ['waiting', 'wait'], done: ['done', 'off'], failed: ['failed', 'bad'], stalled: ['stuck', 'bad'], unknown: ['unknown', 'bad'],
+    disabled: ['off', 'off'], parking: ['stepping aside', 'wait'], resuming: ['coming back', 'wait']})[j.word] || [j.word, 'wait'];
+}
+const RUNS = [['share', 'Runs alongside prod'], ['yield', 'Runs alongside prod, gives way'], ['no', 'Runs only while prod sleeps'], ['big', 'Runs only during slow-wake prod']];
+const runsOf = (q, j) => (q && q.window_only) || j.window_only ? 'big' : (j.coexist || 'no');
+
+// ---------- the verdict, the sentence, the shelf ----------
+function needs() {
+  const out = [], now = Date.now() / 1000;
+  if (S.paused) out.push(['warn', `${SVC()} only is on`, 'every job has stepped aside and nothing starts until you end it.', 'brake']);
+  for (const [n, v] of Object.entries(S.services)) {
+    if ((v.health || []).length) out.push(['bad', `${n} isn't answering`, v.health.join('; ') + '.']);
+    else if (v.unavailable && !v.switching) out.push(['warn', n, v.unavailable + '.']);
+  }
+  for (const [n, j] of Object.entries(S.jobs)) {
+    if ((j.health || []).length && !j.frozen) out.push(['bad', `${n} looks stuck`, j.health.join('; ') + '.']);
+    if ((j.health || []).length && !j.frozen) out[out.length - 1].push('job:' + n + ':log');
+    if (j.word === 'failed') out.push(['bad', `${n} failed`, `it exited with code ${(j.result || {}).rc}. Start again runs it again.`, 'job:' + n + ':log']);
+    if (j.frozen && j.frozen_since && now - j.frozen_since > 1800)
+      out.push(['info', `${n} is paused`, `for ${dur(now - j.frozen_since)}, still holding ${gib(S.holders[n])} of GPU memory. Resume continues it.`, 'job:' + n]);
+  }
+  const unk = (S.stowaways || []).reduce((t, p) => t + p.gib, 0);
+  if (unk > 1) out.push(['warn', 'Unknown GPU use', `${gib(unk)} is held by processes GapRunner doesn't manage (${owners().map(([k, v]) => `${k}, ${gib(v)}`).join('; ')}). Jobs can't use it.` +
+    ((S.servers || []).length ? ` Model servers it doesn't manage: ${(S.servers || []).map(serverText).join('; ')}.` : ''), 'unknown']);
+  if (S.gpu_hold) out.push(['bad', 'GPU hold', `${S.gpu_hold.job || 'a job'} was stopped but its processes are still alive; nothing new starts until they're gone.`]);
+  if (S.draining) out.push(['info', 'Winding down all', 'running jobs stop at their next saved point; nothing new starts until you end it.', 'jobs']);
+  if (S.mode === 'shadow') out.push(['info', 'Shadow mode', 'GapRunner is watching and learning; it changes nothing.']);
+  if (!S.gpu) out.push(['bad', "Can't read the GPU", "the driver didn't answer; GapRunner starts nothing until it does."]);
+  return out;
+}
+function prodSentence(n, v) {
+  const [w] = prodWord(v);
+  const model = Object.keys(v.engines || {}).length > 1 ? ` on ${v.engine}` : '';
+  if (v.switching) return `${n} is switching to ${v.switching.to}${v.switching.since ? ` (${dur(Date.now() / 1000 - v.switching.since)} so far)` : ''}`;
+  if (w === 'answering') return `${n} is answering${model}`;
+  if (w === 'awake') return `${n} is awake${model}${v.idle_s != null ? `, quiet for ${dur(v.idle_s)}` : ''}`;
+  if (w === 'asleep') return `${n} is asleep${model} and wakes on the next request`;
+  if (w === 'off') return `${n} is off`;
+  return `${n} is ${w}${model}`;
+}
+function upNext() {
+  if (S.next) return `Up next: <b>${esc(S.next.name)}</b>, ${esc(S.next.why)}.`;
+  const wound = Object.values(S.jobs).filter(j => j.word === 'held' && j.state !== 'hot').length;
+  const big = Object.entries(S.jobs).filter(([, j]) => j.word === 'window').map(([n]) => n);
+  const bits = [];
+  if (wound) bits.push(`${wound} job${wound > 1 ? 's are' : ' is'} wound down (Start lets ${wound > 1 ? 'them' : 'it'} run)`);
+  if (big.length) bits.push(`${esc(big.join(', '))} ${big.length > 1 ? 'wait' : 'waits'} for slow-wake ${SV()} or no ${SV()}`);
+  return `Nothing is up next.${bits.length ? ' ' + bits.join('; ') + '.' : ''}`;
+}
+function renderTop() {
+  $('#ver').textContent = S.version ? ' ' + S.version : '';
+  $('#machine').textContent = S.gpu ? `${S.gpu.name}, ${gib(S.gpu.total_gib)}` : '';
+  const n = needs();
+  const level = n.some(x => x[0] === 'bad') ? 'bad' : n.some(x => x[0] === 'warn') ? 'warn' : 'good';
+  $('#dot').className = 'dot ' + level;
+  const js = Object.entries(S.jobs);
+  const running = js.filter(([, j]) => j.state === 'hot' && !j.frozen).length, paused = js.filter(([, j]) => j.frozen);
+  let jobsBit = running ? `${running} job${running > 1 ? 's' : ''} running` : 'No jobs running';
+  if (paused.length) jobsBit += `, ${paused.length} paused by you`;
+  const head = Object.entries(S.services).map(([k, v]) => prodSentence(k, v)).join('. ');
+  const unk = unkGib();
+  $('#say').innerHTML = esc(head) + `. <small>${unk > 1 ? `${gib(unk)} of the GPU is held by processes GapRunner doesn't manage. ` : ''}${esc(jobsBit)}. ${upNext()}</small>`;
+  document.title = (level === 'bad' ? '(!) ' : '') + 'GapRunner';
+  const GO = {unknown: 'See them', brake: 'End it', jobs: 'Jobs'};
+  $('#needs').innerHTML = n.map(([c, b, t, go]) => go ? `<button class="need ${c}" data-go="${esc(go)}"><span><b>${esc(b)}</b>: ${esc(t)}</span><span class="go">${GO[go] || (go.endsWith(':log') ? 'Open its log' : 'Open')}</span></button>`
+    : `<div class="need ${c}"><span><b>${esc(b)}</b>: ${esc(t)}</span></div>`).join('');
+  $('#brakebtn').textContent = S.paused ? `End ${SVC()} only` : `${SVC()} only`;
+  $('#brakebtn').className = 'btn ' + (S.paused ? 'primary' : 'danger');
+  $('#brakebtn').disabled = !S.writable;
+  $('#pinbtn').textContent = !S.writable ? 'Read-only' : PIN ? 'Lock' : 'Unlock';
+  $('#pinbtn').disabled = !S.writable;
+  $('#pinbtn').title = !S.writable ? 'Changes are off here: set ui_pin_file in the config' : PIN ? 'Forget the PIN in this browser' : 'Enter the PIN to make changes';
+  $('#jobcount').textContent = ` ${S.queue.filter(q => !['done', 'cleared'].includes(catOf(q.name))).length}`;
+  $('#foot').textContent = `GapRunner ${S.version || ''}, ${S.mode === 'live' ? 'live' : 'shadow mode'}. Times are in your time zone.`;
+}
+function renderShelf() {
+  const g = S.gpu; if (!g) { $('#bar').innerHTML = ''; return; }
+  const segs = [], order = holderOrder();
+  for (const n of order) if ((S.holders[n] || 0) > 0.05) {
+    const j = S.jobs[n], v = S.services[n];
+    const label = v && Object.keys(v.engines || {}).length > 1 ? `${n} (${v.engine})` : n;
+    segs.push({n: label, v: S.holders[n], c: color(n), paused: j && (j.frozen || j.paused), note: j ? jobWord(j)[0] : prodWord(v)[0]});
+  }
+  for (const [k, v] of Object.entries(S.holders)) if (!order.includes(k) && v > 0.05) segs.push({n: k, v, c: color(k), unknown: k.startsWith('claim'), note: k.startsWith('claim') ? 'run by hand, counted' : ''});
+  let own = owners();
+  if (own.length > 3) { const byUser = {}; own.forEach(([k, v]) => { const u = k.split(':')[0] + ': several'; byUser[u] = (byUser[u] || 0) + v; }); own = Object.entries(byUser); }
+  for (const [k, v] of own) if (v > 0.05) segs.push({n: k, v, c: 'var(--overflow)', unknown: true, note: `not ${SV()} or a job; GapRunner doesn't manage it`});
+  const counted = segs.reduce((t, s) => t + s.v, 0), other = Math.max(0, g.used_gib - counted);
+  if (other > 1) segs.push({n: 'driver and other', v: other, c: 'var(--overflow)', note: ''});
+  const free = Math.max(0, g.total_gib - g.used_gib);
+  const W = $('#bar').clientWidth || 900, wide = v => v / g.total_gib * W;
+  const svcNames = Object.keys(S.services);
+  const size = s => { const px = wide(s.v); return px >= 90 ? '' : (px >= 34 && svcNames.some(v => s.n.startsWith(v))) ? 'mid' : 'small'; };
+  $('#bar').innerHTML = segs.map(s => `<div class="seg ${s.paused ? 'paused' : ''} ${s.unknown ? 'unknown' : ''} ${size(s)} ${inkFor(s.c)}" style="flex:${s.v} 0 0;background-color:${s.c}" title="${esc(s.n)}: ${gib(s.v)}${s.note ? ', ' + esc(s.note) : ''}">
+      <span class="n">${esc(s.n)}</span><span class="g">${gib(s.v)}${s.paused ? ', paused' : ''}</span></div>`).join('') +
+    `<div class="seg free ${wide(free) < 90 ? 'small' : ''}" style="flex:${free} 0 0" title="free: ${gib(free)}"><span class="n">${gib(free)} free</span></div>`;
+  $('#keys').innerHTML = segs.filter(s => size(s) === 'small').map(s => `<span><i class="sw ${s.paused || s.unknown ? 'hatched' : ''}" style="background-color:${s.c}"></i>${esc(s.n)} ${gib(s.v)}</span>`).join('');
+  $('#shelfsub').textContent = `${gib(g.used_gib)} used of ${gib(g.total_gib)}`;
+  $('#shelfright').innerHTML = [g.util != null ? `<b>${Math.round(g.util)}%</b> busy` : '', g.power_w != null ? `<b>${Math.round(g.power_w)} W</b>` : '',
+    g.temp_c != null ? `${Math.round(g.temp_c)} °C` : ''].filter(Boolean).join(', ');
+  $('#bar').setAttribute('aria-label', `GPU memory: ${segs.map(s => `${s.n} ${gib(s.v)}`).join(', ')}, ${gib(free)} free`);
+  const tot = S.cpu_total_gib, fr = S.cpu_free_gib;
+  $('#rail').classList.toggle('hide', fr == null);
+  if (fr != null) {
+    $('#railtext').textContent = tot ? `${gib(tot - fr)} used of ${gib(tot)}` : `${gib(fr)} free`;
+    $('#railfill').style.width = tot ? Math.max(1, Math.min(100, (tot - fr) / tot * 100)) + '%' : '0%';
+  }
+}
+
+// ---------- prod ----------
+function renderProd() {
+  $('#prodcol').innerHTML = Object.entries(S.services).map(([n, v]) => {
+    const [w, cls] = prodWord(v);
+    const engines = Object.entries(v.engines || {});
+    const run = v.running || {};
+    const ck = engines.length > 1 ? `${n}/${v.engine}` : n;
+    const cost = k => { const c = (S.costs[ck] || {})[k]; return c && c.seconds != null ? (c.seconds < 10 ? `${(+c.seconds).toFixed(1)} s` : dur(c.seconds)) : '–'; };
+    return `<section class="panel">
+      <div class="headrow"><h2>${esc(n)}</h2><span class="chip ${cls}">${esc(w)}</span></div>
+      <dl class="kv">
+        ${engines.length > 1 ? `<dt>Model</dt><dd><b>${esc(v.engine)}</b></dd>` : ''}
+        <dt>Last request</dt><dd>${v.inflight ? `answering ${v.inflight} request${v.inflight > 1 ? 's' : ''} now` : v.last_request_t ? `${tm(v.last_request_t)}, ${ago(v.last_request_t)}` : '–'}</dd>
+        <dt>GPU memory</dt><dd>${gib(S.holders[n] || 0)} <span class="faint">(expects ${gib(run.hbm_gib)})</span></dd>
+        ${engineRows(v)}
+        <dt>Sleeps</dt><dd>after ${dur(v.idle_park_s)} quiet, when a job can use the time</dd>
+        <dt>Sleep and wake</dt><dd>falls asleep in ${cost('park')}, wakes in ${cost('resume')} <span class="faint">(${((S.costs[ck] || {}).park || {}).measured ? 'measured' : 'recipe guess'})</span></dd>
+        ${(v.schedule || []).length ? `<dt>Schedule</dt><dd>${v.schedule.map(x => `${esc(x.engine)} at ${esc(x.at)}`).join(', ')}</dd>` : ''}
+      </dl>
+      ${engines.length > 1 ? `<div class="models" role="group" aria-label="Switch the ${esc(n)} model">${engines.filter(([, x]) => !x.current).map(([en]) => `<button class="model" data-svc="${esc(n)}" data-eng="${esc(en)}" ${v.switching || !S.writable ? 'disabled' : ''} title="Stop ${esc(v.engine)} and start ${esc(en)} as ${esc(n)}">Switch to ${esc(en)}…</button>`).join('')}</div>` : ''}
+    </section>`;
+  }).join('');
+}
+
+// ---------- job rows ----------
+function progressHtml(j) {
+  if (j.progress == null && !j.part_text) return `<div class="prog">${j.tps && !j.frozen ? esc(speedText(j.tps)) : ''}</div>`;
+  if (!j.progress && j.state !== 'hot' && !j.frozen) return `<div class="prog">${esc(j.progress_text || '')}${j.progress_text ? ', not started' : ''}</div>`;
+  const bar = j.progress != null ? `<div class="t" aria-hidden="true"><div class="f" style="width:${Math.round(j.progress * 100)}%"></div></div>${esc(j.progress_text || pct(j.progress))}${j.gpu_hours_left != null ? `, about ${j.gpu_hours_left} GPU-h left` : ''}` : '';
+  const part = (j.part != null || j.part_text) && !j.frozen && j.state === 'hot' ? `<div class="t part" aria-hidden="true"><div class="f" style="width:${Math.round((j.part || 0) * 100)}%"></div></div>${esc(j.part_text || '')}` : '';
+  const sp = j.tps && !j.frozen ? `<div style="margin-top:4px">${esc(speedText(j.tps))}</div>` : '';
+  return `<div class="prog">${bar}${part}${sp}</div>`;
+}
+function buttons(n, j) {
+  const d = S.writable ? '' : 'disabled', b = (act, label, cls, title) => `<button class="btn ${cls || ''}" ${d} data-act="${act}" data-n="${esc(n)}"${title ? ` title="${title}"` : ''}>${label}</button>`;
+  const out = [];
+  if (j.frozen) out.push(b('thaw', 'Resume', 'primary', 'Continue from the same instant'));
+  else if (j.state === 'hot') out.push(b('freeze', 'Pause', '', "Stop it exactly where it is; nothing is lost, its GPU memory stays in use"));
+  if (['done', 'failed'].includes(j.word)) out.push(b('start', 'Start again', ''));
+  else if (j.hold || j.word === 'held') {
+    out.push(b('start', 'Start', '', "Let it run as soon as there's room"));
+    out.push(b('queue', 'Queue', '', 'Start it by itself once another job finishes'));
+  }
+  else out.push(b('winddown', 'Wind down', '', "Finish the current run, then don't start again"));
+  if (j.state === 'hot' || j.frozen) out.push(b('stop', 'Stop', 'danger', 'End it now; it resumes from its last checkpoint when you Start it'));
+  return out.join('');
+}
+let SORT = (() => { try { return JSON.parse(localStorage.getItem('gaprunner.sort')) || {k: 'queue', d: 1}; } catch (e) { return {k: 'queue', d: 1}; } })();
+let QS = '', TAGF = '', CUR = null, PANE = null, PTAB = 'overview', LOGT = null;
+function whyOf(n) {
+  const j = S.jobs[n], q = qOf(n);
+  if (!j) return (q && q.notes) || 'Not set up to run yet: it needs a recipe.';
+  if (j.hold && j.state === 'hot' && !j.frozen) return j.stops_at_saved_point
+    ? `winding down: stops at its next saved point${j.saved_base ? ` (last saved: ${j.saved_base})` : ''}` : 'winding down: finishes its current run, then stays off';
+  return j.why;
+}
+const RUNSHORT = {share: 'beside prod', yield: 'beside prod, gives way', no: 'while prod sleeps', big: 'slow-wake prod only'};
+const tagsOf = n => (S.jobs[n] ? S.jobs[n].tags : (qOf(n) || {}).tags) || [];
+function timeOf(n) {
+  const j = S.jobs[n]; if (!j) return [null, ''];
+  if (j.state === 'hot' && j.started_t) return [j.started_t, `since ${tm(j.started_t)}`];
+  if (j.result && j.result.t) return [j.result.t, `${j.result.rc === 0 ? 'done' : 'ended'} ${tmd(j.result.t)}`];
+  if (j.waiting_s && ['waiting', 'blocked', 'next'].includes(j.word)) return [Date.now() / 1000 - j.waiting_s, `waiting ${dur(j.waiting_s)}`];
+  return [null, ''];
+}
+const SORTS = {queue: n => S.queue.findIndex(q => q.name === n), name: n => n.toLowerCase(),
+  status: n => ['running', 'queued', 'wound', 'failed', 'idea', 'done', 'cleared'].indexOf(catOf(n)),
+  progress: n => (S.jobs[n] || {}).progress ?? -1, speed: n => (((S.jobs[n] || {}).tps) || {}).out ?? -1,
+  gpu: n => S.holders[n] || 0, time: n => timeOf(n)[0] ?? 0};
+function rowHtml(n, opt) {
+  const j = S.jobs[n], q = qOf(n), idea = !j;
+  const [word, cls] = idea ? ['idea', 'idea'] : jobWord(j);
+  const mem = S.holders[n] || 0, sel = opt.select && S.writable;
+  const tags = tagsOf(n).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+  const prog = idea ? '' : (j.progress != null ? `<div class="bar" aria-hidden="true"><i style="width:${Math.round(j.progress * 100)}%"></i></div>${esc(j.progress_text || pct(j.progress))}` : esc(j.progress_text || ''))
+    + (j && j.part_text && j.state === 'hot' && !j.frozen ? `<div class="faint">${esc(j.part_text)}</div>` : '');
+  const sp = j && j.tps && !j.frozen && j.state === 'hot' ? tok(j.tps.out) + ' tok/s' : '';
+  const cls2 = [PICK.has(n) && sel ? 'picked' : '', CUR === n ? 'cursor' : '', PANE === n ? 'current' : ''].join(' ');
+  const isDone = j && j.word === 'done';
+  return `<tr class="${cls2}${isDone ? ' is-done' : ''}" data-job="${esc(n)}" tabindex="-1">
+    ${sel ? `<td class="c-pick">${SORT.k === 'queue' ? `<span class="grip" draggable="true" data-grip="${esc(n)}" title="Drag to reorder" aria-hidden="true">⠿</span>` : ''}<input type="checkbox" data-pick="${esc(n)}" aria-label="Select ${esc(n)}" ${PICK.has(n) ? 'checked' : ''}></td>` : ''}
+    <td class="c-name"><div class="nm">${idea ? '<i class="sw" style="background:transparent;border:1px dashed var(--rule)"></i>' : `<i class="sw ${j.frozen ? 'hatched' : ''}" style="background-color:${color(n)}"></i>`}<button class="linkbtn" data-act="details" data-n="${esc(n)}" title="${esc(whyOf(n) || '')}">${esc(n)}</button>${tags}${q && q.archived ? '<span class="tag">cleared</span>' : ''}</div><div class="why">${isDone ? '' : esc(whyOf(n) || '')}</div></td>
+    <td class="c-status"><span class="chip ${cls}">${esc(word)}</span></td>
+    <td class="c-prog">${prog}</td>
+    ${opt.compact || !opt.speed ? '' : `<td class="num c-speed">${sp}</td>`}
+    ${opt.gpu === false ? '' : `<td class="num c-gpu">${mem > 0.05 ? gib(mem) : ''}</td>`}
+    ${opt.compact ? '' : `<td class="c-runs">${idea ? '' : RUNSHORT[runsOf(q, j)]}</td><td class="c-time">${timeOf(n)[1]}</td>`}
+    <td class="c-meta">${[sp, mem > 0.05 ? gib(mem) : '', opt.compact || idea ? '' : RUNSHORT[runsOf(q, j)], opt.compact ? '' : timeOf(n)[1]].filter(Boolean).join(', ')}</td>
+  </tr>`;
+}
+function headHtml(cols) {
+  const col = (k, l, cls = '') => `<th class="${cls}" ${SORT.k === k ? `aria-sort="${SORT.d > 0 ? 'ascending' : 'descending'}"` : ''}><button data-sort="${k}" title="Sort by ${l.toLowerCase() || 'queue order'}">${l}${SORT.k === k ? (SORT.d > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
+  const list = visible(), all = list.length && list.every(n => PICK.has(n));
+  return `<tr>${S.writable ? `<th class="c-pick"><input type="checkbox" id="pickall" aria-label="Select all shown" ${all ? 'checked' : ''}> ${SORT.k !== 'queue' ? `<button data-sort="queue" title="Back to queue order" style="all:unset;cursor:pointer">#</button>` : ''}</th>` : ''}`
+    + col('name', 'Job', 'c-name') + col('status', 'Status') + col('progress', 'Progress') + (cols.speed ? col('speed', 'Speed', 'num') : '') + (cols.gpu ? col('gpu', 'GPU', 'num') : '')
+    + `<th>Runs</th>` + col('time', 'When') + '</tr>';
+}
+function visible() {
+  let list = shown();
+  if (TAGF) list = list.filter(n => tagsOf(n).includes(TAGF));
+  if (QS) { const t = QS.toLowerCase(); list = list.filter(n => [n, whyOf(n), (qOf(n) || {}).notes, (S.jobs[n] || {}).goal, ...tagsOf(n)].join(' ').toLowerCase().includes(t)); }
+  if (SORT.k !== 'queue') { const f = SORTS[SORT.k]; list = [...list].sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * SORT.d; }); }
+  return list;
+}
+function afterOptions(n, cur) {
+  return `<option value="" ${cur ? '' : 'selected'}>Doesn't wait for another job</option>` +
+    holderOrder().filter(x => S.jobs[x] && x !== n).map(x => `<option value="${esc(x)}" ${x === cur ? 'selected' : ''}>Starts after ${esc(x)}</option>`).join('');
+}
+function guessAfter(n) {
+  // the nearest job above it in the queue that is running or already lined up
+  const names = S.queue.map(q => q.name), i = names.indexOf(n);
+  for (let k = i - 1; k >= 0; k--) {
+    const j = S.jobs[names[k]];
+    if (!j || j.frozen || j.word === 'window' || ['done', 'failed'].includes(j.word)) continue;
+    if ((j.state === 'hot' && j.word !== 'held') || (!j.hold && ['blocked', 'waiting', 'next'].includes(j.word))) return names[k];
+  }
+  return '';
+}
+async function queueJob(n) {
+  try { S = await get('api/status'); } catch (e) {}       // fresh state: a job queued a second ago must count as lined up
+  const j = S.jobs[n], d = $('#qdlg'), dep = guessAfter(n);
+  $('#qorder').classList.add('hide');
+  $('#qtitle').textContent = `Queue ${n}`;
+  $('#qafter').innerHTML = afterOptions(n, dep).replace("Doesn't wait for another job", 'No other job: start when there is room');
+  const runs = () => { const a = $('#qafter').value; return a && S.jobs[a] && runsOf(qOf(a), S.jobs[a]) !== 'big' ? runsOf(qOf(a), S.jobs[a]) : runsOf(qOf(n), j); };
+  const fill = () => { $('#qruns').innerHTML = RUNS.map(([v, l]) => `<option value="${v}" ${runs() === v ? 'selected' : ''}>${l}</option>`).join(''); };
+  fill(); $('#qafter').onchange = fill;
+  d.onclose = async () => {
+    if (d.returnValue !== 'ok') return;
+    const after = $('#qafter').value, v = $('#qruns').value, was = runsOf(qOf(n), j);
+    if (v !== was) {
+      if (v === 'big') await action({action: 'set', name: n, field: 'window_only', value: true});
+      else {
+        if (was === 'big') await action({action: 'set', name: n, field: 'window_only', value: false});
+        if (v !== j.coexist) await action({action: 'set', name: n, field: 'coexist', value: v});
+      }
+    }
+    action({action: 'queue', name: n, after});
+  };
+  d.showModal();
+}
+function moveButtons(n) {
+  const d = S.writable ? '' : 'disabled';
+  return `<button class="btn icon" ${d} data-act="up" data-n="${esc(n)}" aria-label="Move ${esc(n)} up the queue" title="Move up the queue">↑</button><button class="btn icon" ${d} data-act="down" data-n="${esc(n)}" aria-label="Move ${esc(n)} down the queue" title="Move down the queue">↓</button>`;
+}
+function ideaDrawer(n, q) {
+  return `<div class="drawer"><div><div class="goal">${esc(q.notes || 'No notes yet.')}</div>
+    <p class="muted" style="font-size:13px">To make it runnable, add a [[job]] recipe with this name to the config (docs/RECIPES.md); an agent can write one from the notes.</p></div>
+    <div><div class="acts" style="justify-content:flex-start">${moveButtons(n)}<button class="btn danger" ${S.writable ? '' : 'disabled'} data-act="remove" data-n="${esc(n)}">Remove idea</button></div></div></div>`;
+}
+function drawer(n, j, q) {
+  const d = S.writable ? '' : 'disabled';
+  const run = j.running || {}, park = j.parked || {}, c = j.calibration;
+  const cost = k => { const x = (S.costs[n] || {})[k]; return x && x.seconds != null ? `${dur(x.seconds)} <span class="faint">${x.measured ? `measured ${x.n}×` : 'recipe guess'}</span>` : '–'; };
+  const measuring = Object.values(S.jobs).some(x => x.calibrating);
+  const recipe = [`driver     ${j.driver}`, j.workdir ? `workdir    ${j.workdir}` : '', j.start_cmd ? `start      ${j.start_cmd}` : '',
+    (j.after || []).length ? `after      ${j.after.join(', ')}` : '', j.requires_engine ? `needs      ${j.target_service || SV()} on ${j.requires_engine}` : '',
+    j.max_hours ? `time limit ${j.max_hours} h of running` : '', j.result ? `last exit  code ${j.result.rc}${j.result.t ? ' at ' + tmd(j.result.t) : ''}` : ''].filter(Boolean).join('\n');
+  const fit = runsOf(q, j) === 'big' ? (() => { const R = roomInfo(), need = j.gpu_gib || 0;
+    return `<p class="fit">Needs ${gib(need)}. Slow-wake ${SV()} gives about ${gib(Math.max(0, R.bigRoom))}${R.bigRoom >= need ? ' (fits)' : ''}; no ${SV()} gives about ${gib(Math.max(0, R.offRoom))}${R.offRoom >= need ? ' (fits)' : ''}${R.other > 1 ? `, after ${gib(R.other)} of hand-run or unknown use` : ''}.</p>`; })() : '';
+  return `<div class="drawer">
+    <div>
+      <p class="why-big">${esc(whyOf(n) || '')}</p>${progressHtml(j)}${fit}${summaryHtml(j)}
+      ${j.goal ? `<div class="goal">${esc(j.goal)}</div>` : `<div class="goal" style="color:var(--warn-ink)">No goal written yet: say what this job is for and what done means.</div>`}
+      ${j.notes ? `<p class="muted" style="font-size:13px;margin:10px 0 0">${esc(j.notes)}</p>` : ''}
+      ${(() => { const w = (j.after || []).filter(x => !(S.jobs[x] && S.jobs[x].result && S.jobs[x].result.rc === 0));
+        return w.length && j.state !== 'hot' && !['done', 'failed'].includes(j.word) ? `<p style="margin:12px 0 0;font-size:14px">Waits for <b>${esc(w.join(', '))}</b> to finish.</p>` : ''; })()}
+      ${j.result ? `<p style="margin:8px 0 0;font-size:14px">Last exit: code ${j.result.rc}${j.result.t ? `, ${tmd(j.result.t)}` : ''}${j.result.rc ? '. The Log tab shows why.' : '.'}</p>` : ''}
+    </div>
+    <div>
+      <dl>
+        <dt>GPU memory</dt><dd>${gib(S.holders[n] || 0)} now <span class="faint">(expects ${gib(run.hbm_gib)} running, ${gib(park.hbm_gib)} stepped aside)</span></dd>
+        <dt>CPU memory</dt><dd>${j.cpu_gib_now != null ? gib(j.cpu_gib_now) + ' now ' : ''}<span class="faint">(expects ${gib(run.cpu_gib)})</span></dd>
+        <dt>Disk</dt><dd>${gib(run.ssd_gib)}</dd>
+        ${engineRows(j)}
+        <dt>Step aside</dt><dd>${cost('park')}</dd>
+        <dt>Come back</dt><dd>${cost('resume')}</dd>
+        ${j.gave_way ? `<dt>Gave way</dt><dd>${j.gave_way}× since GapRunner started</dd>` : ''}
+        ${j.run_hours ? `<dt>Has run</dt><dd>${j.run_hours} h</dd>` : ''}
+      </dl>
+      <p style="margin:16px 0 8px"><label class="muted" style="font-size:13px;display:block;margin-bottom:3px" for="after-${esc(n)}">Starts after</label>
+        <select id="after-${esc(n)}" data-after="${esc(n)}" ${d}>${afterOptions(n, (j.after || [])[0] || '')}</select></p>
+      <p style="margin:0 0 10px"><label class="muted" style="font-size:13px;display:block;margin-bottom:3px" for="runs-${esc(n)}">Where it runs</label>
+        <select id="runs-${esc(n)}" data-runs="${esc(n)}" ${d}>${RUNS.map(([v, l]) => `<option value="${v}" ${runsOf(q, j) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></p>
+      <div class="acts" style="justify-content:flex-start">${moveButtons(n)}
+        <button class="btn" ${S.writable && !measuring ? '' : 'disabled'} data-act="measure" data-n="${esc(n)}" title="${measuring ? 'Another job is being measured' : 'Run it briefly to fill in its memory and its step-aside and come-back times'}">${j.calibrating ? 'Measuring…' : 'Measure'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+function renderNowJobs() {
+  const on = holderOrder().filter(n => S.jobs[n] && (S.jobs[n].state === 'hot' || S.jobs[n].frozen || ['next', 'stalled', 'failed'].includes(S.jobs[n].word)));
+  const list = S.next && !on.includes(S.next.name) ? [...on, S.next.name] : on;
+  const rest = S.queue.length - list.filter(n => qOf(n)).length;
+  const extra = Object.entries(S.holders).filter(([k, v]) => k.startsWith('claim: ') && v > 0.05)
+    .map(([k, v]) => `<tr class="unk"><td class="c-name"><div class="nm"><i class="sw hatched" style="background-color:var(--overflow)"></i><span>${esc(k.slice(7))}</span><span class="tag">by hand</span></div><div class="why">Run by hand outside GapRunner and registered as a claim, so it's counted.</div></td><td class="c-status"><span class="chip wait">claim</span></td><td class="c-prog"></td><td class="num c-gpu">${gib(v)}</td><td class="c-meta">${gib(v)}</td></tr>`)
+    .concat((unkGib() > 1 ? S.servers || [] : []).map(v => `<tr class="unk" data-job="srv:${v.port}"><td class="c-name"><div class="nm"><i class="sw" style="background:transparent;border:1px dashed var(--faint)"></i><span>${esc(serverText(v))}</span></div><div class="why">A model server on this machine that GapRunner doesn't manage. If it's a job, give it a recipe; if it's work run by hand, register it as a claim.</div></td><td class="c-status"><span class="chip wait">server</span></td><td class="c-prog"></td><td class="num c-gpu"></td><td class="c-meta"></td></tr>`))
+    .concat((S.stowaways || []).map(p => `<tr class="unk"><td class="c-name"><div class="nm"><i class="sw hatched" style="background-color:var(--overflow)"></i><span title="${esc(p.cmd || '')}">${esc(procLabel(p))}</span><span class="faint" style="font-weight:400">pid ${p.pid}</span></div><div class="why">Not ${SV()} or a job, so GapRunner doesn't manage it${p.started ? `; running since ${tmd(p.started)}` : ''}. Register hand-run work as a claim (Help).</div></td><td class="c-status"><span class="chip bad">unknown</span></td><td class="c-prog"></td><td class="num c-gpu">${gib(p.gib)}</td><td class="c-meta">${gib(p.gib)}</td></tr>`));
+  patchRows($('#nowjobs'), list.map(n => rowHtml(n, {compact: true})).join('') + extra.join(''));
+  $('#nowjobs').closest('.tablewrap').classList.toggle('hide', !list.length && !extra.length);
+  const active = S.queue.filter(q => !['done', 'cleared'].includes(catOf(q.name)) && !list.includes(q.name)).length;
+  $('#nowhint').innerHTML = (list.length || extra.length ? '' : `Nothing besides ${SV()} is on the GPU, and nothing is about to start. `) + (active > 0 ? `${active} more active in the <a href="#jobs">queue</a>.` : '');
+}
+function renderQueue() {
+  const names = S.queue.map(q => q.name), cats = Object.fromEntries(names.map(n => [n, catOf(n)]));
+  const cnt = c => names.filter(n => cats[n] === c).length;
+  $('#upnext').textContent = [['running', 'running'], ['queued', 'queued'], ['big', `waiting for slow-wake ${SV()}`], ['wound', 'wound down'], ['failed', 'failed'], ['idea', 'ideas']]
+    .filter(([c]) => cnt(c)).map(([c, l]) => `${cnt(c)} ${l}`).join(', ');
+  for (const n of [...PICK]) if (!names.includes(n)) PICK.delete(n);
+  $('#qfilters').innerHTML = QFILTERS.map(([key, l, f]) => { const c = names.filter(n => f(cats[n])).length;
+    return (c || ['active', 'all'].includes(key) || QF === key) ? `<button data-qf="${key}" aria-pressed="${QF === key}">${l}<span class="n">${c}</span></button>` : ''; }).join('');
+  const tagCount = {};
+  shown().forEach(n => tagsOf(n).forEach(t => { tagCount[t] = (tagCount[t] || 0) + 1; }));
+  if (TAGF && !tagCount[TAGF]) tagCount[TAGF] = 0;
+  $('#tagchips').innerHTML = Object.entries(tagCount).sort().map(([t, c]) => `<button data-tagf="${esc(t)}" aria-pressed="${TAGF === t}">${esc(t)}<span class="n">${c}</span></button>`).join('');
+  const done = names.filter(n => cats[n] === 'done');
+  $('#clearfin').textContent = `Clear finished (${done.length})`;
+  $('#clearfin').classList.toggle('hide', !done.length || !S.writable);
+  const list = visible();
+  if (CUR && !list.includes(CUR)) CUR = null;
+  const cols = {speed: list.some(n => S.jobs[n] && S.jobs[n].tps && S.jobs[n].state === 'hot'), gpu: list.some(n => (S.holders[n] || 0) > 0.05)};
+  $('#jth').innerHTML = headHtml(cols);
+  let empty = 'Nothing here. Pick another filter above.';
+  if (!S.queue.length) empty = 'The queue is empty. Add an idea below, or give a job a recipe in the config.';
+  else if (QS || TAGF) {
+    const saved = QF; QF = 'all'; const more = visible().length; QF = saved;
+    empty = more && QF !== 'all' ? `No ${(QFILTERS.find(x => x[0] === QF) || [0, ''])[1].toLowerCase()} job matches. ${more} match in All. <button class="btn quiet" data-qf="all">Show them</button>`
+      : 'No job matches. Clear the search or the tag.';
+  }
+  patchRows($('#queue'), list.map(n => rowHtml(n, {select: true, speed: cols.speed, gpu: cols.gpu})).join('') ||
+    `<tr><td colspan="8" class="muted" style="padding:18px 14px">${empty}</td></tr>`);
+  $('#qhint').innerHTML = S.writable ? (SORT.k === 'queue' ? 'Higher in the list starts first, among jobs that fit. <span class="kbd-hint">Drag ⠿ to reorder. Press <kbd>?</kbd> for keys.</span>' : 'Sorted by a column; click # to go back to queue order.') : '';
+  renderBulk();
+  $('#addform').classList.toggle('hide', !S.writable || !PIN);
+  $('#stow').innerHTML = ((S.servers || []).length ? `<p class="muted" style="margin:0 0 10px;font-size:13px">Other model servers on this machine that GapRunner doesn't manage (they may use other GPUs or none): ${esc((S.servers || []).map(serverText).join('; '))}.</p>` : '') + ((S.stowaways || []).length ? `<table><tr><th>Process</th><th>Owner</th><th>Started</th><th class="n">GPU memory</th></tr>` +
+    S.stowaways.map(p => `<tr><td><b>${esc(p.name)}</b> <span class="faint">pid ${p.pid}</span>${p.cmd ? `<div class="mono faint">${esc(p.cmd)}</div>` : ''}</td><td>${esc(p.user || '?')}</td><td>${p.started ? tmd(p.started) : '?'}</td><td class="n">${gib(p.gib)}</td></tr>`).join('') + '</table>'
+    : `<p class="muted">None: everything on the GPU is ${SV()} or a job.</p>`);
+  renderControls();
+  renderPlan();
+  renderPane();
+}
+const targets = () => { const sel = S.queue.map(q => q.name).filter(n => PICK.has(n)); return sel.length ? sel : (CUR ? [CUR] : []); };
+function renderBulk() {
+  const sel = S.queue.map(q => q.name).filter(n => PICK.has(n)), b = $('#bulk');
+  b.classList.toggle('hide', !sel.length);
+  if (!sel.length) { b.innerHTML = ''; return; }
+  const cats = sel.map(catOf), any = c => cats.some(x => c.includes(x)), jobsOnly = sel.every(n => S.jobs[n]);
+  const btn = (op, l, cls, cond = true, title = '') => cond ? `<button class="btn ${cls || ''}" data-bulk="${op}"${title ? ` title="${title}"` : ''}>${l}</button>` : '';
+  b.innerHTML = `<span class="count">${sel.length} selected</span>` +
+    btn('start', 'Start', '', any(['wound', 'done', 'failed', 'cleared']), "Let them run as soon as there's room") +
+    btn('chain', 'Queue in order…', 'primary', sel.some(n => S.jobs[n]), 'Each starts when the one before it finishes, in the order shown' + (jobsOnly ? '' : '; ideas are skipped')) +
+    btn('winddown', 'Wind down', '', any(['running', 'queued'])) +
+    btn('pause', 'Pause', '', sel.some(n => S.jobs[n] && S.jobs[n].state === 'hot' && !S.jobs[n].frozen)) +
+    btn('resume', 'Resume', '', sel.some(n => S.jobs[n] && S.jobs[n].frozen)) +
+    btn('stop', 'Stop', 'danger', any(['running'])) +
+    (jobsOnly ? `<select data-bulkruns aria-label="Where they run"><option value="">Runs…</option>${RUNS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>` : '') +
+    btn('top', 'Move to top') + btn('bottom', 'Move to bottom') +
+    btn('clear', 'Clear', '', any(['done', 'failed', 'wound', 'idea', 'queued']), 'Hide it under Cleared; it never starts by itself') +
+    btn('unclear', 'Bring back', '', any(['cleared'])) +
+    btn('remove', 'Remove ideas', 'danger', any(['idea'])) +
+    `<button class="btn quiet" data-bulk="none">Deselect</button>`;
+}
+async function bulkOp(op, value) {
+  const sel = targets();
+  if (!sel.length) return;
+  const list = sel.join('\n  ');
+  const msg = {stop: `Stop these now? They lose work since their last checkpoint and stay off until you press Start.\n\n  ${list}`,
+    remove: `Remove these ideas?\n\n  ${sel.filter(n => !S.jobs[n]).join('\n  ')}`,
+    winddown: `Wind these down? Each stops at its next saved point (or finishes its run if it can't say), then stays off.\n\n  ${list}`,
+    pause: `Pause these where they are? Nothing is lost; their GPU memory stays in use.\n\n  ${list}`}[op];
+  if (msg && !(await askDlg(msg))) return;
+  await action({action: 'bulk', op, names: op === 'remove' ? sel.filter(n => !S.jobs[n]) : sel, value});
+  if (['clear', 'unclear', 'remove'].includes(op)) PICK.clear();
+  render();
+}
+async function chainDialog() {
+  const want = targets();
+  try { S = await get('api/status'); } catch (e) {}
+  const order = curTab() === 'jobs' ? visible() : S.queue.map(q => q.name);                 // the order shown on the page
+  const sel = order.filter(n => want.includes(n) && S.jobs[n]), skipped = want.filter(n => !S.jobs[n]).length;
+  if (!sel.length) return;
+  const d = $('#qdlg');
+  $('#qtitle').textContent = (sel.length === 1 ? `Queue ${sel[0]}` : `Queue ${sel.length} jobs in this order`) + (skipped ? ` (${skipped} idea${skipped > 1 ? 's' : ''} skipped)` : '');
+  $('#qorder').classList.toggle('hide', sel.length < 2);
+  $('#qorder').innerHTML = sel.map((n, i) => `<li>${esc(n)} <span class="faint">${i ? 'after the one above' : ''}</span></li>`).join('');
+  const dep = guessAfter(sel[0]);
+  $('#qafter').innerHTML = `<option value="">No other job: the first starts when there is room</option>` +
+    holderOrder().filter(x => S.jobs[x] && !sel.includes(x)).map(x => `<option value="${esc(x)}" ${x === dep ? 'selected' : ''}>First starts after ${esc(x)}</option>`).join('');
+  const first = sel[0], runs = () => { const a = $('#qafter').value; return a && S.jobs[a] && runsOf(qOf(a), S.jobs[a]) !== 'big' ? runsOf(qOf(a), S.jobs[a]) : runsOf(qOf(first), S.jobs[first]); };
+  const same = sel.every(n => runsOf(qOf(n), S.jobs[n]) === runsOf(qOf(first), S.jobs[first]));
+  const fill = () => { $('#qruns').innerHTML = `<option value="" ${same ? '' : 'selected'}>Keep each job's setting${same ? ` (${RUNS.find(r => r[0] === runsOf(qOf(first), S.jobs[first]))[1].toLowerCase()})` : ''}</option>` +
+    RUNS.map(([v, l]) => `<option value="${v}">${l} (all of them)</option>`).join(''); };
+  fill(); $('#qafter').onchange = null; void runs;
+  d.onclose = async () => {
+    if (d.returnValue !== 'ok') return;
+    const after = $('#qafter').value, v = $('#qruns').value;
+    if (v && sel.some(n => runsOf(qOf(n), S.jobs[n]) !== v)) await action({action: 'bulk', op: 'runs', names: sel, value: v});
+    await action({action: 'chain', names: sel, after});
+    PICK.clear(); render();
+  };
+  d.showModal();
+}
+document.addEventListener('click', e => {
+  const f = e.target.closest('[data-qf]');
+  if (f) { QF = f.dataset.qf; try { localStorage.setItem('gaprunner.qf', QF); } catch (x) {} PICK.clear(); render(); return; }
+  if (e.target.id === 'clearfin') {
+    const done = S.queue.map(q => q.name).filter(n => catOf(n) === 'done');
+    if (done.length) action({action: 'bulk', op: 'clear', names: done});
+    return;
+  }
+  const b = e.target.closest('[data-bulk]');
+  if (b) { if (b.dataset.bulk === 'none') { PICK.clear(); render(); } else if (b.dataset.bulk === 'chain') chainDialog(); else bulkOp(b.dataset.bulk); return; }
+  const c = e.target.closest('input[data-pick]');
+  if (c) {
+    const n = c.dataset.pick, list = visible();
+    if (e.shiftKey && LASTPICK && list.includes(LASTPICK)) {         // shift-click: the range takes this box's state
+      const [a, z] = [list.indexOf(LASTPICK), list.indexOf(n)].sort((x, y) => x - y);
+      list.slice(a, z + 1).forEach(x => c.checked ? PICK.add(x) : PICK.delete(x));
+    } else c.checked ? PICK.add(n) : PICK.delete(n);
+    LASTPICK = n; render(); return;
+  }
+  if (e.target.id === 'pickall') { const list = visible(); e.target.checked ? list.forEach(n => PICK.add(n)) : list.forEach(n => PICK.delete(n)); render(); }
+});
+document.addEventListener('change', e => {
+  const s = e.target.closest('select[data-bulkruns]');
+  if (s && s.value) bulkOp('runs', s.value);
+});
+document.addEventListener('click', e => {
+  const st = e.target.closest('[data-sort]');
+  if (st) { const k = st.dataset.sort; SORT = SORT.k === k && k !== 'queue' ? {k, d: -SORT.d} : {k, d: k === 'time' || k === 'gpu' || k === 'speed' || k === 'progress' ? -1 : 1};
+    try { localStorage.setItem('gaprunner.sort', JSON.stringify(SORT)); } catch (x) {} render(); return; }
+  const tg = e.target.closest('[data-tagf]');
+  if (tg) { TAGF = TAGF === tg.dataset.tagf ? '' : tg.dataset.tagf; PICK.clear(); render(); return; }
+  const pt = e.target.closest('[data-ptab]');
+  if (pt) { PTAB = pt.dataset.ptab; $('#panebody').dataset.for = ''; delete $('#panebody').dataset.scrolled; renderPane(); return; }
+  if (e.target.closest('#paneclose')) return closePane();
+  if (e.target.closest('#keysbtn')) return $('#keysdlg').showModal();
+  const sv = e.target.closest('[data-savetags]');
+  if (sv) { action({action: 'set', name: sv.dataset.savetags, field: 'tags', value: $('#tagin').value}); return; }
+  const row = e.target.closest('tr[data-job]');
+  if (row && !row.dataset.job.startsWith('srv:') && !e.target.closest('input,button,select,a,.grip')) openPane(row.dataset.job);
+});
+$('#qsearch').addEventListener('input', e => { QS = e.target.value.trim(); renderQueue(); });
+$('#qsearch').addEventListener('keydown', e => { if (e.key === 'Escape') { e.target.value = ''; QS = ''; e.target.blur(); renderQueue(); } if (e.key === 'Enter') e.target.blur(); });
+// keyboard: torrent-client style; ignored while typing or in a dialog
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest && e.target.closest('input,textarea,select,dialog[open]')) return;
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('button,a,[role=tab],summary')) return;
+  const k = e.key, tab = curTab();
+  if (k === '?') { e.preventDefault(); $('#keysdlg').showModal(); return; }
+  if (['1', '2', '3', '4'].includes(k)) { location.hash = '#' + ['now', 'jobs', 'history', 'help'][+k - 1]; return; }
+  if (k === 'Escape') { if (PANE) closePane(); else if (QS) { $('#qsearch').value = ''; QS = ''; render(); } else if (PICK.size) { PICK.clear(); render(); } return; }
+  if (!S) return;
+  if (k === '/') { e.preventDefault(); if (tab !== 'jobs') location.hash = '#jobs'; setTimeout(() => $('#qsearch').focus(), 0); return; }
+  const list = tab === 'jobs' ? visible() : [...document.querySelectorAll('#nowjobs tr[data-job]')].map(r => r.dataset.job);
+  if (['j', 'k', 'ArrowDown', 'ArrowUp'].includes(k)) {
+    e.preventDefault(); if (!list.length) return;
+    const i = list.indexOf(CUR), down = k === 'j' || k === 'ArrowDown';
+    CUR = list[i < 0 ? 0 : Math.max(0, Math.min(list.length - 1, i + (down ? 1 : -1)))];
+    if (PANE) PANE = CUR;
+    render(); const el = [...document.querySelectorAll(`tr[data-job="${CSS.escape(CUR)}"]`)].find(x => x.offsetParent);
+    if (el) { el.scrollIntoView({block: 'nearest'}); const paneTop = PANE ? $('#pane').getBoundingClientRect().top : innerHeight, b = el.getBoundingClientRect().bottom;
+      if (b > paneTop - 8) window.scrollBy(0, b - paneTop + 24); }
+    return;
+  }
+  if (k === 'Enter' && CUR) { openPane(CUR); return; }
+  if (!S.writable || tab !== 'jobs') return;
+  if (k === 'x' && CUR) { PICK.has(CUR) ? PICK.delete(CUR) : PICK.add(CUR); render(); return; }
+  if (k === 'a') { visible().forEach(n => PICK.add(n)); render(); return; }
+  const t = targets(); if (!t.length) return;
+  if (k === 's') bulkOp('start');
+  else if (k === 'w') bulkOp('winddown');
+  else if (k === 'c') bulkOp('clear');
+  else if (k === 'q') (PIN ? chainDialog() : askPin().then(ok => ok && chainDialog()));
+  else if (k === 'p') bulkOp(t.some(n => S.jobs[n] && S.jobs[n].frozen) ? 'resume' : 'pause');
+});
+// drag and drop: drag a row by its grip; a selected row carries the whole selection
+document.addEventListener('dragstart', e => {
+  const g = e.target.closest && e.target.closest('[data-grip]'); if (!g) return;
+  const n = g.dataset.grip, sel = S.queue.map(q => q.name).filter(x => PICK.has(x));
+  DRAG = PICK.has(n) && sel.length > 1 ? sel : [n];
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', DRAG.join(', '));
+  document.querySelectorAll('#queue tr[data-job]').forEach(el => { if (DRAG.includes(el.dataset.job)) el.classList.add('dragging'); });
+});
+document.addEventListener('dragover', e => {
+  if (!DRAG) return;
+  const t = e.target.closest && (e.target.closest('#queue tr[data-job]')); if (!t) return;
+  e.preventDefault();
+  document.querySelectorAll('.drop-before').forEach(el => el.classList.remove('drop-before'));
+  t.classList.add('drop-before');
+});
+document.addEventListener('drop', e => {
+  if (!DRAG) return;
+  const t = e.target.closest && (e.target.closest('#queue tr[data-job]')); if (!t) return;
+  e.preventDefault();
+  const before = t.dataset.job || '';
+  if (!DRAG.includes(before)) action({action: 'reorder', names: DRAG, before});
+  DRAG = null;
+});
+document.addEventListener('dragend', () => { DRAG = null; document.querySelectorAll('.drop-before,.dragging').forEach(el => el.classList.remove('drop-before', 'dragging')); });
+// ---------- coming up: a timeline of what runs next, estimated from progress and past runs ----------
+const frac = n => { const j = S.jobs[n]; return j && j.progress != null ? j.progress : 0; };
+const denom = n => { const m = /\/(\d+)/.exec((S.jobs[n] || {}).progress_text || ''); return m ? m[1] : ''; };
+const family = n => n.split(':')[0].replace(/\s*\d+$/, '').trim();          // "27B score 6: ..." -> "27B score"
+const median = a => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
+function fullRun(n) {
+  // seconds a whole run of n takes: its own last finished run, else similar finished jobs (same family and size, then size, then tags)
+  const own = ((PAST[n] || {}).finished || []).filter(r => r.rc === 0 && r.run_s > 60).map(r => r.run_s);
+  if (own.length) return [own[own.length - 1], 'its last run'];
+  const done = Object.keys(PAST).filter(x => x !== n && ((PAST[x] || {}).finished || []).some(r => r.rc === 0 && r.run_s > 60));
+  const last = x => PAST[x].finished.filter(r => r.rc === 0 && r.run_s > 60).slice(-1)[0].run_s;
+  for (const [pick, how] of [[x => family(x) === family(n) && denom(x) === denom(n) && denom(n), 'similar jobs'],
+                             [x => denom(x) === denom(n) && denom(n), 'jobs of the same size'],
+                             [x => tagsOf(x).some(t => tagsOf(n).includes(t)), 'jobs with the same tags']]) {
+    const m = median(done.filter(pick).map(last));
+    if (m) return [m, how];
+  }
+  return [null, ''];
+}
+function remaining(n) {
+  // [seconds left or null, how it was estimated]
+  const j = S.jobs[n], p = frac(n), cur = (PAST[n] || {}).current_s || 0;
+  if (j.state === 'hot' && j.gpu_hours_left != null) return [j.gpu_hours_left * 3600, 'its pace'];
+  const [full, how] = fullRun(n);
+  if (full) return [Math.max(60, j.state === 'hot' && cur ? full - cur : full * (1 - p)), how];
+  if (j.state === 'hot' && p > 0.02 && cur > 120) return [cur * (1 - p) / p, 'its pace'];
+  return [null, ''];
+}
+function buildPlan() {
+  const live = n => ['running', 'queued'].includes(catOf(n));
+  const names = S.queue.map(q => q.name).filter(n => S.jobs[n] && live(n));
+  const kids = {};
+  names.forEach(n => (S.jobs[n].after || []).forEach(d => { (kids[d] = kids[d] || []).push(n); }));
+  const roots = names.filter(n => !(S.jobs[n].after || []).some(d => names.includes(d)));
+  const lanes = [], now = Date.now() / 1000;
+  const walk = (n, t, lane) => {
+    const j = S.jobs[n], [left, how] = remaining(n);
+    const start = j.state === 'hot' ? now : t, end = left == null || start == null ? null : start + left;
+    lane.push({n, start, end, how, hot: j.state === 'hot', frozen: j.frozen});
+    (kids[n] || []).forEach((k, i) => { if (i === 0) walk(k, end, lane); else { const l2 = []; lanes.push(l2); walk(k, end, l2); } });
+  };
+  roots.forEach(n => { const lane = []; lanes.push(lane); walk(n, now, lane); });
+  const big = S.queue.map(q => q.name).filter(n => S.jobs[n] && catOf(n) === 'big');
+  return {lanes, big, now};
+}
+function renderPlan() {
+  const {lanes, big, now} = buildPlan(), el = $('#plan');
+  const items = lanes.flat(), ends = items.map(x => x.end).filter(x => x != null);
+  const last = ends.length ? Math.max(...ends) : null, unknown = items.filter(x => x.end == null);
+  const t1 = Math.max(now + 6 * 3600, last || 0) + 1800, span = t1 - now, X = t => Math.max(0, Math.min(100, (t - now) / span * 100));
+  const step = span > 30 * 3600 ? 6 : span > 14 * 3600 ? 3 : span > 7 * 3600 ? 2 : 1;
+  const first = Math.ceil(now / 3600) * 3600, ticks = [];
+  for (let t = first; t < t1; t += step * 3600) ticks.push(t);
+  const Wpx = (el.clientWidth || 900) - 28, every = Math.max(1, Math.ceil(ticks.length * 74 / Wpx)), gap = 64 / Wpx * 100;   // labels need ~70 px each
+  const summary = !items.length ? 'Nothing is lined up. Queue jobs to see when they would run.'
+    : (last ? `The queue should be done around <b>${tmd(last)}</b>, about ${dur(last - now)} from now. ` : '') +
+      (unknown.length ? `${unknown.length} job${unknown.length > 1 ? 's have' : ' has'} no estimate yet (no progress or past runs), so times after ${unknown.length > 1 ? 'them' : 'it'} are unknown. ` : '') +
+      'A failed job stops its chain.';
+  const short = n => { const h = n.split(':')[0]; return Wpx < 520 && /\d+$/.test(h) ? h.match(/\d+$/)[0] : h; };   // phones: "6" for "27B score 6"
+  const bar = x => {
+    const c = color(x.n), left = x.start == null ? null : X(x.start), w = x.end == null ? null : Math.max(0.6, X(x.end) - X(x.start));
+    const title = `${x.n}: ${x.hot ? 'running now' : x.start ? 'starts about ' + tmd(x.start) : 'starts when the one before it ends'}${x.end ? `, done about ${tmd(x.end)} (${x.how})` : ', length unknown'}`;
+    if (left == null) return `<div class="pb unknown" style="left:${X(last || now)}%;width:14%" title="${esc(title)}"><span>${esc(x.n.split(':')[0])} ?</span></div>`;
+    if (w == null) return `<div class="pb unknown" style="left:${left}%;width:14%" title="${esc(title)}"><span>${esc(x.n.split(':')[0])} ?</span></div>`;
+    return `<div class="pb ${x.hot ? 'now' : ''} ${x.how !== 'its pace' && x.how !== 'its last run' ? 'guess' : ''} ${inkFor(c)}" data-act="details" data-n="${esc(x.n)}" style="left:${left}%;width:${w}%;background-color:${c}" title="${esc(title)}"><span>${esc(short(x.n))}</span></div>`;
+  };
+  el.innerHTML = `<div class="ph"><h2>Coming up</h2><span class="muted" style="font-size:13px">Estimated from progress and past runs; striped bars are guesses from similar jobs.</span></div>` +
+    (items.length ? `<div class="box"><div class="axis"><span style="left:0">now</span>${ticks.filter((t, i) => X(t) > gap && i % every === 0).map(t => `<span style="left:${X(t)}%">${tm(t)}</span>`).join('')}</div>
+      <div class="lanes"><div class="grid">${ticks.map(t => `<i style="left:${X(t)}%"></i>`).join('')}</div><div class="nowline" style="left:0" title="now"></div>
+      ${lanes.map(l => `<div class="lane">${l.map(bar).join('')}</div>`).join('')}</div>
+      <p class="notes">${summary}${big.length ? ` Waiting for slow-wake ${SV()}: ${esc(big.map(n => { const [f] = fullRun(n), p = frac(n); return `${n}${f ? ` (about ${dur(f * (1 - p))} of work left)` : ''}`; }).join(', '))}.` : ''}</p></div>`
+      : `<p class="notes">${summary}${big.length ? ` Waiting for slow-wake ${SV()}: ${esc(big.join(', '))}.` : ''}</p>`);
+  $('#nowplan').innerHTML = items.length && last ? `The queue should be done around <b>${tmd(last)}</b> (<a href="#jobs">Coming up</a>).` : '';
+}
+// ---------- details pane ----------
+function openPane(n, tab, fromHash) {
+  if (!fromHash && PANE !== n) history.pushState(null, '', `#${curTab()}/${encodeURIComponent(n)}`);   // Back closes it; the URL links to the job
+  PANE = n; CUR = n; if (tab) PTAB = tab;
+  document.body.classList.add('pane-open'); $('#pane').classList.remove('hide');
+  render();
+}
+function closePane(fromHash) {
+  if (!fromHash && location.hash.includes('/')) history.replaceState(null, '', '#' + curTab());
+  PANE = null; clearTimeout(LOGT); document.body.classList.remove('pane-open'); $('#pane').classList.add('hide'); render();
+}
+function renderPane() {
+  if (!PANE) return;
+  const n = PANE, j = S.jobs[n], q = qOf(n);
+  if (!j && !q) return closePane();
+  const [word, cls] = j ? jobWord(j) : ['idea', 'idea'];
+  $('#panesw').innerHTML = j ? `<i class="sw ${j.frozen ? 'hatched' : ''}" style="background-color:${color(n)}"></i>` : '';
+  $('#panetitle').textContent = n;
+  $('#panechip').innerHTML = `<span class="chip ${cls}">${esc(word)}</span>`;
+  $('#paneacts').innerHTML = j ? buttons(n, j) : '';
+  const tabs = j ? [['overview', 'Overview'], ['log', 'Log'], ['recipe', 'Recipe'], ['history', 'History']] : [['overview', 'Overview']];
+  if (!tabs.find(t => t[0] === PTAB)) PTAB = 'overview';
+  $('#panetabs').innerHTML = tabs.map(([k, l]) => `<button role="tab" data-ptab="${k}" aria-selected="${PTAB === k}">${l}</button>`).join('');
+  const body = $('#panebody'), keep = body.dataset.for === n + PTAB ? body.scrollTop : 0;
+  const ae = document.activeElement;
+  if (body.dataset.for === n + PTAB && body.contains(ae) && /INPUT|SELECT|TEXTAREA/.test(ae.tagName)) return;   // don't rebuild under someone typing
+  if (PTAB === 'overview') {
+    const tagRow = S.writable ? `<div class="tagedit"><label for="tagin" class="muted" style="font-size:13px">Tags</label>
+      <input type="text" id="tagin" value="${esc(tagsOf(n).join(', '))}" placeholder="e.g. nightly, eval" data-tags="${esc(n)}"><button class="btn" data-savetags="${esc(n)}">Save</button></div>` : '';
+    body.innerHTML = (j ? drawer(n, j, q) : ideaDrawer(n, q)) + tagRow;
+  } else if (PTAB === 'recipe') {
+    const recipe = [`driver     ${j.driver}`, j.workdir ? `workdir    ${j.workdir}` : '', j.start_cmd ? `start      ${j.start_cmd}` : '',
+      (j.after || []).length ? `after      ${j.after.join(', ')}` : '', j.requires_engine ? `needs      ${j.target_service || SV()} on ${j.requires_engine}` : '',
+      j.max_hours ? `time limit ${j.max_hours} h of running` : '', j.result ? `last exit  code ${j.result.rc}${j.result.t ? ' at ' + tmd(j.result.t) : ''}` : ''].filter(Boolean).join('\n');
+    const c = j.calibration;
+    body.innerHTML = `<pre class="recipe mono" style="margin-top:0">${esc(recipe)}</pre>` +
+      (c && c.toml ? `<p class="muted" style="font-size:13px;margin:14px 0 4px">Measured ${c.t ? tmd(c.t) : ''}. Paste this into the job's [[job]] entry in the config and restart GapRunner; until then the recipe's guesses are used.</p><pre class="recipe mono" style="margin-top:0">${esc(c.toml)}</pre>` : '<p class="muted" style="font-size:13px">Not measured yet: Measure fills in its memory and its step-aside times.</p>');
+  } else if (PTAB === 'history') {
+    const evs = EVENTS.filter(e => e.target === n || e.name === n || (e.event === 'ui_action' && (e.did || '').includes(n))).slice(0, 120);
+    body.innerHTML = evs.length ? `<table><tr><th>When</th><th>What</th><th>Detail</th></tr>${evs.map(e => `<tr class="${evGroup(e) === 'bad' ? 'problem' : ''}"><td class="faint" style="white-space:nowrap">${tmd(e.t)}</td><td>${esc(evWord(e))}</td><td>${esc(evText(e))}</td></tr>`).join('')}</table>`
+      : '<p class="muted">Nothing recorded for this job in the recent events.</p>';
+  } else if (PTAB === 'log' && body.dataset.for !== n + PTAB) {
+    body.innerHTML = '<p class="muted">Reading the log…</p>';
+    loadLog(n);
+  }
+  if (PTAB !== 'log') { body.dataset.for = n + PTAB; body.scrollTop = keep; }
+}
+function summaryHtml(j) {
+  // the job's own highlights (summary_cmd), e.g. the best results so far
+  return j && j.summary && j.summary.length ? `<div class="sumbox" aria-label="Highlights"><pre class="mono">${esc(j.summary.join('\n'))}</pre></div>` : '';
+}
+async function loadLog(n) {
+  clearTimeout(LOGT);
+  if (PANE !== n || PTAB !== 'log') return;
+  const body = $('#panebody'), atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  try {
+    const L = await get(`api/log?name=${encodeURIComponent(n)}&n=400`);
+    if (PANE !== n || PTAB !== 'log') return;
+    body.dataset.for = n + 'log';
+    body.innerHTML = summaryHtml(S.jobs[n]) + (L.error ? `<p class="muted">${esc(L.error)}</p>` : !L.lines.length ? `<p class="muted">No log yet${L.path ? ` (${esc(L.path)})` : ''}.</p>`
+      : `<div class="codeline" style="margin-bottom:8px"><code>${esc(L.path)}</code><span class="faint" style="font-size:12px">last ${L.lines.length} lines, written ${L.mtime ? ago(L.mtime) : ''}</span><button class="btn quiet" data-copy="${esc(L.path)}">Copy path</button></div><pre class="logbox mono">${esc(L.lines.join('\n'))}</pre>`);
+    if (atEnd || !body.dataset.scrolled) { body.scrollTop = body.scrollHeight; body.dataset.scrolled = '1'; }
+  } catch (e) { body.innerHTML = `<p class="muted">Couldn't read the log (${esc(e.message)}).</p>`; }
+  const j = S.jobs[n];
+  if (j && (j.state === 'hot' || j.frozen)) LOGT = setTimeout(() => loadLog(n), 10000);   // follow a running job's log
+}
+function renderControls() {
+  const d = S.writable ? '' : 'disabled';
+  const R = roomInfo(), big = R.big, using = R.using;
+  const canStop = Object.values(S.services).some(v => v.can_stop);
+  const preview = (label, room) => {
+    if (!big.length) return '';
+    const fits = big.filter(([, j]) => (j.gpu_gib || 0) <= room), not = big.filter(([, j]) => (j.gpu_gib || 0) > room);
+    const holding = [...using.map(([n]) => `${n} ${gib(S.holders[n])}${S.jobs[n].frozen ? ' (paused)' : ''}`), ...(R.other > 1 ? [`hand-run or unknown use ${gib(R.other)}`] : [])];
+    return `<div><b>${label}</b> gives about ${gib(Math.max(0, room))}. ` + (fits.length ? `Would start ${esc(fits.map(([n, j]) => `${n} (${gib(j.gpu_gib)})`).join(', '))}. ` : '') +
+      (not.length ? `Doesn't fit: ${esc(not.map(([n, j]) => `${n} (needs ${gib(j.gpu_gib)})`).join(', '))}${holding.length ? `; the GPU also holds ${esc(holding.join(', '))}` : ''}.` : '') + '</div>';
+  };
+  const on = S.window_open, ex = S.window_exclusive, hrs = x => [1, 3, 8].map(h => `<button class="btn" ${d} data-win="${h}"${x ? ' data-x="1"' : ''}>${h} h</button>`).join('');
+  const seg = x => `<span class="hrs">${[1, 3, 8].map(h => `<button ${d} data-win="${h}"${x ? ' data-x="1"' : ''}>${h} h</button>`).join('')}</span>`;
+  const until = S.window_until ? ' until ' + tm(S.window_until) : '';
+  const plus = `<button class="btn" ${d} data-extend="1" title="Keep it on one more hour">+1 h</button>`;
+  $('#controls').innerHTML = `
+    <div class="grp" role="group" aria-label="Slow-wake ${SV()}"><b>Slow-wake ${SV()}</b>${on && !ex ? `<span class="on">on${until}</span>${plus}<button class="btn" ${d} data-win="0">End</button>` : on ? '' : seg(false)}</div>
+    ${canStop ? `<div class="grp" role="group" aria-label="No ${SV()}"><b>No ${SV()}</b>${on && ex ? `<span class="on">on${until}</span>${plus}<button class="btn" ${d} data-win="0">End and start ${SV()}</button>` : on ? '' : seg(true)}</div>` : ''}
+    <span class="grow"></span>
+    <div class="grp" role="group" aria-label="Everything"><button class="btn" ${d} id="drainbtn" title="Running jobs stop at their next saved point; nothing new starts">${S.draining ? 'End wind down' : 'Wind down all'}</button>
+      <button class="btn ${S.paused ? 'primary' : 'danger'}" ${d} data-brake="1" title="The emergency brake: every job steps aside, ${SV()} stays awake">${S.paused ? `End ${SVC()} only` : `${SVC()} only`}</button></div>
+    <div class="strip-note">${on ? (ex ? `${SV()} is off; it starts again when this ends. ` : `${SV()} answers, but may take longer to wake while slow jobs step aside. `)
+      : `Slow-wake ${SV()} lets jobs that are slow to step aside run while ${SV()} sleeps; requests may wait longer${canStop ? `. No ${SV()} stops ${SV()} so jobs get the whole GPU` : ''}. `}${big.length ? '' : `No job waits for slow-wake ${SV()}.`}
+      ${big.length ? preview(`Slow-wake ${SV()}`, R.bigRoom) + (canStop ? preview(`No ${SV()}`, R.offRoom) : '') : ''}</div>`;
+}
+
+// ---------- clicks ----------
+document.addEventListener('click', async e => {
+  const cp = e.target.closest('[data-copy]');
+  if (cp) { if (navigator.clipboard) navigator.clipboard.writeText(cp.dataset.copy).then(() => toast('Copied the log path')); return; }
+  const m = e.target.closest('button.model');
+  if (m && !m.disabled) return switchModel(m.dataset.svc, m.dataset.eng);
+  const w = e.target.closest('[data-win]');
+  if (w && !w.disabled) return windowAction(+w.dataset.win, !!w.dataset.x);
+  const ex1 = e.target.closest('[data-extend]');
+  if (ex1 && !ex1.disabled && S.window_until) return action({action: 'window', hours: Math.max(0.05, (S.window_until - Date.now() / 1000) / 3600 + 1), exclusive: !!S.window_exclusive});
+  const go = e.target.closest('[data-go]');
+  if (go) {
+    const g = go.dataset.go;
+    if (g === 'unknown') { location.hash = '#now'; setTimeout(() => { const el = document.querySelector('#nowjobs tr.unk'); if (el) el.scrollIntoView({block: 'center'}); }, 50); }
+    else if (g === 'brake') document.querySelector('[data-brake]').click();
+    else if (g === 'jobs') location.hash = '#jobs';
+    else if (g.startsWith('job:')) { const [, n, t] = g.split(':'); openPane(n, t || 'overview'); }
+    return;
+  }
+  if (e.target.id === 'drainbtn') {
+    if (S.draining) return action({action: 'undrain'});
+    if (await askDlg(`Wind down all?\n\nRunning jobs stop at their next saved point (a job that can't say when it saved finishes its run); nothing new starts until you end it. ${SVC()} is not affected.`)) action({action: 'drain'});
+    return;
+  }
+  const br = e.target.closest('[data-brake]');
+  if (br && !br.disabled) {
+    if (S.paused) return action({action: 'unpause'});
+    const hot = Object.entries(S.jobs).filter(([, j]) => j.state === 'hot' || j.frozen).map(([n]) => n);
+    if (await askDlg(`${SVC()} only?\n\nThe emergency brake: ${SV()} wakes and stays awake, every running job steps aside${hot.length ? ` (now: ${hot.join(', ')})` : ''}, and nothing starts until you end it. Jobs continue from where they saved when you end it.`)) action({action: 'pause'});
+    return;
+  }
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const n = b.dataset.n, j = S.jobs[n] || {};
+  switch (b.dataset.act) {
+    case 'details': openPane(n); break;
+    case 'up': case 'down': action({action: 'move', name: n, dir: b.dataset.act}); break;
+    case 'remove': if (await askDlg(`Remove the idea "${n}"?`)) action({action: 'remove', name: n}); break;
+    case 'start': action({action: 'set', name: n, field: 'hold', value: false}); break;
+    case 'queue': if (!PIN) askPin().then(ok => ok && queueJob(n)); else queueJob(n); break;
+    case 'winddown':
+      if (j.state !== 'hot' || await askDlg(j.stops_at_saved_point
+          ? `Wind down "${n}"?\n\nIt stops by itself at its next saved point (only work after that is redone), and won't start again until you press Start or Queue.`
+          : `Wind down "${n}"?\n\nThis job can't say when its work is saved, so it finishes its current run (a long training run can take days), then won't start again until you press Start.\n\nTo free the GPU now, use Pause (keeps its memory, nothing lost) or Stop (loses work since its last checkpoint).`))
+        action({action: 'set', name: n, field: 'hold', value: true});
+      break;
+    case 'freeze': if (await askDlg(`Pause "${n}" where it is?\n\nIts processes stop at once and nothing is lost; Resume continues from the same instant. Its GPU memory (${gib(S.holders[n])}) stays in use while it's paused.`)) action({action: 'freeze', name: n}); break;
+    case 'thaw': action({action: 'thaw', name: n}); break;
+    case 'stop': if (await askDlg(`Stop "${n}" now?\n\nIt ends at once and loses work since its last checkpoint. It won't start again until you press Start.`)) action({action: 'stop', name: n}); break;
+    case 'measure': if (await askDlg(`Measure "${n}"?\n\nIt runs for real (even if wound down) for about a minute, steps aside and comes back twice, then is left stopped. A ${SV()} request ends the measuring early.`)) action({action: 'calibrate', name: n}); break;
+  }
+});
+async function switchModel(svc, eng) {
+  const v = S.services[svc], to = v.engines[eng], need = (to.running || {}).hbm_gib || 0;
+  const other = unkGib() + claimGib();
+  let room = (S.gpu ? S.gpu.total_gib : 0) - (S.policy.reserve_gib || 0) - need - other;
+  const aside = [];
+  for (const n of holderOrder().filter(n => S.jobs[n] && (S.holders[n] || 0) > 0.05)) {
+    if (S.holders[n] <= room) room -= S.holders[n]; else aside.push(`${n} (${gib(S.holders[n])})`);
+  }
+  const msg = `Switch ${svc} from ${v.engine} to ${eng}?\n\n${v.engine} stops, freeing its GPU and CPU memory, and ${eng} starts (it needs ${gib(need)}). ` +
+    `Answers already underway finish first; new requests get a "switching" reply until ${eng} answers.` + (aside.length ? `\n\nThese jobs will step aside: ${aside.join(', ')}.` : '') +
+    (room < 0 ? `\n\nWarning: ${gib(other)} is held by hand-run or unknown processes, so ${eng} probably won't fit. The switch would fail and ${v.engine} would start again.` : '');
+  if (await askDlg(msg)) action({action: 'switch', service: svc, engine: eng});
+}
+async function windowAction(h, ex) {
+  if (h === 0) return action({action: 'window', hours: 0});
+  if (ex && !(await askDlg(`No ${SV()} for ${h} h?\n\n${SV()} stops once answers underway finish, so jobs get the whole GPU; requests get an "off until ..." reply. When the ${h} h end, ${SV()} starts again, which can take several minutes.`))) return;
+  action({action: 'window', hours: h, exclusive: ex});
+}
+document.addEventListener('change', async e => {
+  const af = e.target.closest('select[data-after]');
+  if (af) return action({action: 'set', name: af.dataset.after, field: 'after', value: af.value});
+  const sel = e.target.closest('select[data-runs]'); if (!sel) return;
+  const n = sel.dataset.runs, j = S.jobs[n], q = qOf(n), v = sel.value, was = runsOf(q, j);
+  if (j.state === 'hot' && (v === 'big' || v === 'no') && !(await askDlg(`"${n}" is running. "${RUNS.find(r => r[0] === v)[1]}" may make it step aside right away, losing work since its last checkpoint. Change it?`))) { sel.value = was; return; }
+  (async () => {
+    if (v === 'big') return action({action: 'set', name: n, field: 'window_only', value: true});
+    if (was === 'big') await action({action: 'set', name: n, field: 'window_only', value: false});
+    if (v !== j.coexist) await action({action: 'set', name: n, field: 'coexist', value: v});
+  })();
+});
+$('#addform').onsubmit = e => {
+  e.preventDefault(); const n = $('#addname').value.trim(); if (!n) return;
+  action({action: 'add', name: n, notes: $('#addnotes').value.trim()}).then(() => { $('#addname').value = ''; $('#addnotes').value = ''; });
+};
+$('#pinbtn').onclick = () => { if (PIN) { PIN = ''; store(''); toast('Locked: this browser forgot the PIN'); render(); } else askPin(); };
+$('#refreshbtn').onclick = () => refresh(true);
+
+// ---------- chart: GPU memory over time ----------
+function renderTide() {
+  const svg = $('#tide'), W = svg.clientWidth || 800, H = 250, L = 40, R = 12, T = 24, B = 44;
+  const now = Date.now() / 1000, t0 = now - RANGE;
+  const total = (S.gpu && S.gpu.total_gib) || Math.max(1, ...HIST.map(r => r.total || 0));
+  const plotB = H - B - 14;
+  const x = t => L + (t - t0) / RANGE * (W - L - R), y = g => T + (1 - g / total) * (plotB - T);
+  const rows = HIST.filter(r => r.t >= t0), order = holderOrder();
+  const keys = [...order, ...new Set(rows.flatMap(r => Object.keys(r.h || {})).filter(k => !order.includes(k)))].filter(k => rows.some(r => ((r.h || {})[k] || 0) > 0.05));
+  const gap = Math.max(150, RANGE / 400);                        // a hole in the data longer than this is drawn as a gap
+  let html = '<g class="grid">';
+  const step = total > 160 ? 50 : total > 60 ? 20 : 10;
+  for (let g = 0; g <= total; g += step) html += `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}"/><text x="${L - 6}" y="${y(g) + 4}" text-anchor="end">${g}</text>`;
+  html += `<text x="${L - 6}" y="${T - 12}" text-anchor="end">GiB</text></g>`;
+  html += `<defs><pattern id="hp" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2.5" height="6" fill="${css('--overflow')}"/></pattern></defs>`;
+  const layers = [...keys.map(k => ({v: r => (r.h || {})[k] || 0, fill: color(k)})), {v: r => r.stow || 0, fill: 'url(#hp)'}];
+  const base = rows.map(() => 0);
+  for (const ly of layers) {
+    let d = '', seg = [];
+    const flush = () => { if (seg.length > 1) d += 'M' + seg.map(p => `${p[0]},${p[2]}`).join('L') + 'L' + seg.slice().reverse().map(p => `${p[0]},${p[1]}`).join('L') + 'Z'; seg = []; };
+    rows.forEach((r, i) => {
+      if (i && r.t - rows[i - 1].t > gap) flush();
+      const lo = base[i], hi = lo + ly.v(r); base[i] = hi;
+      seg.push([x(r.t).toFixed(1), y(lo).toFixed(1), y(hi).toFixed(1)]);
+    });
+    flush();
+    if (d) html += `<path d="${d}" fill="${ly.fill}"/>`;
+  }
+  // prod answering: a thin strip under the plot
+  const sy = plotB + 4;
+  html += `<rect x="${L}" y="${sy}" width="${W - R - L}" height="7" rx="2" fill="${css('--sunk')}"/><text x="${L - 6}" y="${sy + 7}" text-anchor="end">busy</text>`;
+  for (const n of Object.keys(S.services)) {
+    let start = null;
+    for (const a of ACT.filter(a => a.service === n)) {
+      if (a.event === 'start') start = a.t;
+      else if (start != null) { const a0 = Math.max(start, t0); if (a.t > t0) html += `<rect x="${x(a0)}" y="${sy}" width="${Math.max(2, x(a.t) - x(a0))}" height="7" rx="1" fill="${color(n)}"><title>${esc(n)} answering, ${tm(a0)}</title></rect>`; start = null; }
+    }
+  }
+  const ticks = W < 500 ? 3 : 6;
+  for (let i = 0; i <= ticks; i++) {
+    const t = t0 + i * RANGE / ticks;
+    const day = RANGE >= 86400 ? new Date(t * 1000).toLocaleDateString([], {weekday: 'short'}) + ' ' : '';
+    html += `<text x="${x(t)}" y="${H - 14}" text-anchor="${i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}">${day}${tm(t)}</text>`;
+  }
+  if (rows.length && rows[0].t > t0 + RANGE * 0.05) html += `<text x="${x(rows[0].t) + 4}" y="${T + 12}">history starts ${tm(rows[0].t)}</text>`;
+  html += `<line id="xh" x1="0" x2="0" y1="${T}" y2="${plotB}" stroke="${css('--faint')}" stroke-dasharray="3 3" visibility="hidden"/>`;
+  if (!rows.length) html += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">No history yet: GapRunner records the GPU every 5 s.</text>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = html;
+  const legend = [...new Set(keys.map(k => Object.keys(S.services).find(sv => k.startsWith(sv + ': ')) || k))];
+  $('#tidekeys').innerHTML = [...legend.map(k => `<span><i class="sw" style="background-color:${color(k)}"></i>${esc(k)}</span>`),
+    rows.some(r => r.stow > 0.05) ? `<span><i class="sw hatched" style="background-color:var(--overflow)"></i>unknown</span>` : '',
+    `<span class="faint">The "busy" band under the chart is ${SV()} answering.</span>`].join('');
+  const tip = $('#tidetip');
+  const move = ev => {
+    const bx = svg.getBoundingClientRect(), px = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - bx.left) * W / bx.width;
+    if (px < L || !rows.length) return;
+    const t = t0 + (px - L) / (W - L - R) * RANGE; let r = rows[0];
+    for (const q of rows) if (Math.abs(q.t - t) < Math.abs(r.t - t)) r = q;
+    const xh = $('#xh'); xh.setAttribute('x1', x(r.t)); xh.setAttribute('x2', x(r.t)); xh.setAttribute('visibility', 'visible');
+    const lines = Object.entries(r.h || {}).filter(([, v]) => v > 0.05).map(([k, v]) => `<div class="r"><span><i class="sw" style="background-color:${color(k)}"></i> ${esc(k)}</span><b>${gib(v)}</b></div>`);
+    if (r.stow > 0.05) lines.push(`<div class="r"><span>unknown</span><b>${gib(r.stow)}</b></div>`);
+    tip.innerHTML = `<div class="faint">${tmd(r.t)}</div>${lines.join('') || '<div class="faint">GPU empty</div>'}<div class="r faint"><span>used</span><span>${gib(r.used)}</span></div>`;
+    tip.style.display = 'block'; tip.style.left = Math.max(0, Math.min(x(r.t) / W * bx.width + 12, bx.width - 200)) + 'px'; tip.style.top = '8px';
+  };
+  svg.onmousemove = move; svg.ontouchmove = move; svg.ontouchstart = move;
+  svg.onmouseleave = () => { tip.style.display = 'none'; const xh = $('#xh'); if (xh) xh.setAttribute('visibility', 'hidden'); };
+}
+$('#range').onclick = e => { const b = e.target.closest('button'); if (!b) return; RANGE = +b.dataset.s; document.querySelectorAll('#range button').forEach(x => x.setAttribute('aria-pressed', x === b)); refreshSlow(); };
+
+// ---------- history ----------
+const EV = {
+  start: ['GapRunner started', 'sys'], ui_action: ['your change', 'you'],
+  park: ['stepped aside', 'jobs'], resume: ['came back', 'jobs'], request_wake: ['prod woke for a request', 'prod'], warm_start: ['warming up', 'prod'], warm_done: ['warmed up', 'prod'],
+  yield_pause: ['gave way to prod', 'jobs'], yield_resume: ['back after giving way', 'jobs'], freeze: ['paused', 'you'], thaw: ['resumed', 'you'],
+  job_exit: ['job ended', 'jobs'], job_killed: ["stopped: it didn't step aside in time", 'bad'], wound_down: ['wound down', 'jobs'],
+  unhealthy: ['health check failed', 'bad'], healthy: ['working again', 'prod'], engine_switch_start: ['model switch started', 'prod'],
+  engine_switch: ['model switched', 'prod'], engine_switch_failed: ['model switch failed', 'bad'], service_stop: ['prod stopped', 'prod'],
+  service_start: ['prod starting', 'prod'], service_ready: ['prod ready', 'prod'], service_start_timeout: ["prod didn't start in time", 'bad'],
+  service_release: ['prod gave back cached CPU memory', 'prod'], calibrate_start: ['measuring started', 'jobs'], calibrate_end: ['measuring finished', 'jobs'],
+  overlap_risk: ['woke while memory was still in use', 'bad'], resume_skipped: ["didn't come back: no room", 'jobs'], tick_error: ['GapRunner error', 'bad'],
+  gpu_hold: ['GPU hold', 'bad'], gpu_hold_cleared: ['GPU hold cleared', 'jobs'], max_hours: ['reached its time limit', 'jobs'],
+  would: ['would act (shadow mode)', 'sys'], result_cleared: ['started again: last exit forgotten', 'you'], park_failed: ['failed to step aside', 'bad'], resume_failed: ['failed to come back', 'bad'], start_failed: ['failed to start', 'bad'],
+};
+// "start" is both GapRunner starting (no target) and a job starting (target): tell them apart
+const evWord = e => e.event === 'start' && e.target ? 'job started' : (EV[e.event] || [String(e.event).replace(/_/g, ' ')])[0];
+const evGroup = e => e.event === 'start' && e.target ? 'jobs' : EV[e.event] ? EV[e.event][1] : /fail|error|kill/.test(e.event) ? 'bad' : 'sys';
+function evText(e) {
+  if (e.event === 'start' && e.target) return `${e.target}${e.reason ? ': ' + e.reason : ''}`;
+  if (e.event === 'start') return [e.mode ? `${e.mode} mode` : '', e.version].filter(Boolean).join(', ');
+  if (e.event === 'would') return (e.actions || []).map(a => `${a.kind.replace(/_/g, ' ')} ${a.target}`).join('; ');
+  if (e.event === 'request_wake') return `${e.service} answered after ${e.total_s} s${e.ok === false ? ', but it failed to wake' : ''}`;
+  if (e.event === 'ui_action') return e.did || e.action;
+  if (e.event === 'unhealthy') return `${e.target}: ${(e.issues || []).join('; ').replace(/:\s*\)?\s*$/, '')}`;
+  if (e.event === 'healthy') return `${e.target}${e.was ? ' (was: ' + e.was.join('; ') + ')' : ''}`;
+  if (String(e.event).startsWith('engine_switch')) return `${e.target}: ${e.frm || ''} to ${e.to || ''}${e.seconds ? ` in ${dur(e.seconds)}` : ''}${e.error ? ': ' + e.error : ''}`;
+  if (e.event === 'job_exit') return `${e.target}: exit code ${e.rc}${e.note ? ' (' + e.note + ')' : ''}`;
+  return [e.target || e.service, e.seconds != null ? `took ${dur(e.seconds)}` : '', e.how === 'stopped' ? 'stopped (not enough CPU memory to sleep)' : '', e.reason, e.error, e.note].filter(Boolean).join(', ');
+}
+function renderHistory() {
+  const groups = [['all', 'Everything'], ['bad', 'Problems, 24 h'], ['prod', SVC()], ['jobs', 'Jobs'], ['you', 'Your changes']];
+  const nbad = EVENTS.filter(e => evGroup(e) === 'bad' && e.t > Date.now() / 1000 - 86400).length;
+  $('#filters').innerHTML = groups.map(([k, l]) => `<button data-f="${k}" aria-pressed="${EVF === k}">${l}${k === 'bad' && nbad ? ` ${nbad}` : ''}</button>`).join('');
+  const out = [];                                   // fold runs of the same event on the same target into one line
+  for (const e of EVENTS.filter(e => EVF === 'all' || evGroup(e) === EVF)) {
+    const last = out[out.length - 1];
+    const kind = ev => ev.event === 'yield_resume' ? 'yield_pause' : ev.event;
+    if (last && kind(last.e) === kind(e) && (last.e.target || '') === (e.target || '') && ['start', 'yield_pause', 'request_wake'].includes(kind(e))) {
+      if (e.event !== 'yield_resume') last.n++;
+      last.from = e.t; continue;
+    }
+    out.push({e: e.event === 'yield_resume' ? {...e, event: 'yield_pause', reason: ''} : e, n: e.event === 'yield_resume' ? 0 : 1});
+  }
+  const rows = EVF === 'bad' ? out.filter(({e}) => e.t > Date.now() / 1000 - 86400) : out;
+  $('#events').innerHTML = `<tr><th>When</th><th>What</th><th>Detail</th></tr>` + (rows.slice(0, HISTALL ? 400 : 60).map(({e, n, from}) =>
+    `<tr class="${evGroup(e) === 'bad' ? 'problem' : ''}"><td class="faint" style="white-space:nowrap">${tmd(e.t)}</td><td>${esc(evWord(e))}${n > 1 ? ` <span class="faint">${n}×${from ? ' since ' + tm(from) : ''}</span>` : ''}</td><td>${esc(n > 1 && e.event === 'yield_pause' ? e.target : evText(e))}</td></tr>`).join('') ||
+    `<tr><td colspan="3" class="muted">Nothing here yet.</td></tr>`) +
+    (!HISTALL && rows.length > 60 ? `<tr><td colspan="3"><button class="btn quiet" data-histall="1">Show older (${Math.min(rows.length, 400) - 60} more)</button></td></tr>` : '');
+  if (SUM) {
+    const jh = Object.values(SUM.job_gpu_hours || {}).reduce((a, b) => a + b, 0);
+    const r = [['Job GPU-hours', `${jh.toFixed(1)} h`], [`${SVC()} woke for a request`, `${SUM.service_wakes}×`],
+      ['Extra wait when it woke', SUM.added_wait_p95 == null ? '–' : `${SUM.added_wait_p50} s typical, ${SUM.added_wait_p95} s at worst`],
+      [`${SVC()} answering`, SUM.busy_share == null ? '–' : pct(SUM.busy_share) + ' of the time'], ['Problems', `${nbad}`]];
+    $('#sum').innerHTML = r.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td class="n">${esc(v)}</td></tr>`).join('');
+  }
+  const svg = $('#surv'), W = svg.clientWidth || 300, H = 200, L = 38, R = 12, T = 12, B = 26;
+  const xs = [0, 5, 10, 20, 30, 60, 120, 300, 600];
+  const x = i => L + i / (xs.length - 1) * (W - L - R), y = p => T + (1 - p) * (H - T - B);
+  let html = '<g class="grid">';
+  for (const p of [0, .5, 1]) html += `<line x1="${L}" x2="${W - R}" y1="${y(p)}" y2="${y(p)}"/><text x="${L - 6}" y="${y(p) + 4}" text-anchor="end">${p * 100}%</text>`;
+  html += '</g>';
+  xs.forEach((v, i) => { if (i % 2 === 0 || W > 420) html += `<text x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === xs.length - 1 ? 'end' : 'middle'}">${v < 60 ? v + ' s' : v / 60 + ' min'}</text>`; });
+  let any = false;
+  for (const [n, v] of Object.entries(S.services)) {
+    const pts = (v.survival || []).map(([q, p], i) => p == null ? null : [x(i), y(p), q, p]).filter(Boolean);
+    if (pts.length < 2) continue; any = true;
+    html += `<path d="M${pts.map(p => p[0] + ',' + p[1]).join('L')}" fill="none" stroke="${color(n)}" stroke-width="2"/>`;
+    for (const p of pts) html += `<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="${color(n)}" stroke="${css('--surface')}" stroke-width="2"><title>quiet for ${p[2]} s: ${Math.round(p[3] * 100)}% chance of 30 s more</title></circle>`;
+  }
+  if (!any) html += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">Still learning (needs 20 quiet spells).</text>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.innerHTML = html;
+  $('#survsub').textContent = Object.entries(S.services).map(([n, v]) => `${n}: learned from ${v.gap_samples} quiet spells`).join('; ');
+  const names = [...Object.keys(S.costs).filter(k => !S.jobs[k]), ...S.queue.map(q => q.name).filter(n => S.costs[n])];
+  const c = (n, op) => { const x = (S.costs[n] || {})[op]; return x && x.seconds != null ? `${x.seconds < 10 ? (+x.seconds).toFixed(1) + ' s' : dur(x.seconds)} (${x.measured ? `measured ${x.n}×` : 'recipe guess'})` : '–'; };
+  $('#costs').innerHTML = names.map(n => `<tr><td><div>${esc(n)}</div><div class="faint" style="font-size:13px">steps aside in ${c(n, 'park')}, comes back in ${c(n, 'resume')}</div></td></tr>`).join('');
+  const P = {p_min: ['A job starts in a quiet spell when it is at least this likely to last long enough', pct],
+    worth_factor: ['Long enough means this many times its step-aside plus come-back time', v => v + '×'],
+    max_added_wait_s: [`Most a request may wait for jobs to step aside and ${SV()} to wake (used to choose which jobs run while ${SV()} sleeps)`, dur],
+    wake_deadline_s: ['A job stuck stepping aside for a request is stopped hard after this (0 = 3x the line above)', v => v ? dur(v) : 'automatic'],
+    juggle_s: ['A job that just stepped aside waits this long before coming back', dur],
+    starvation_s: ['A job waiting this long goes to the front of the queue', dur],
+    reserve_gib: ['GPU memory always kept free', gib], cpu_floor_gib: ['CPU memory always kept free', gib],
+    cold_start_after_s: [`Until it has learned ${SV()}'s quiet spells, jobs wait for this much quiet`, dur],
+    park_only_if_work: [`${SVC()} sleeps only when a job can use the time`, v => v ? 'yes' : 'no']};
+  $('#policy').innerHTML = Object.entries(S.policy).map(([k, v]) => `<tr><td>${esc((P[k] || [k])[0])} <span class="faint mono">${esc(k)}</span></td><td class="n">${esc(P[k] ? P[k][1](v) : v)}</td></tr>`).join('');
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-histall]')) { HISTALL = true; renderHistory(); } });
+$('#filters').onclick = e => { const b = e.target.closest('button'); if (!b) return; EVF = b.dataset.f; renderHistory(); };
+
+// ---------- wiring ----------
+// Writing the same HTML again is skipped, and table rows are patched by job, so a refresh doesn't flash, steal
+// focus, close an open menu or wipe what someone is typing.
+function keepHTML(el) {
+  const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  Object.defineProperty(el, 'innerHTML', {configurable: true, get() { return d.get.call(this); },
+    set(v) { if (this._h === v) return; this._h = v; d.set.call(this, v); }});
+}
+['#needs', '#bar', '#keys', '#prodcol', '#qfilters', '#tagchips', '#jth', '#bulk', '#controls', '#events', '#sum', '#costs', '#policy',
+ '#filters', '#tidekeys', '#panetabs', '#paneacts', '#panechip', '#panesw', '#stow', '#plan', '#nowplan', '#nowhint', '#qhint', '#say', '#tide', '#surv']
+  .forEach(sel => { const el = $(sel); if (el) keepHTML(el); });
+function patchRows(tbody, html) {
+  // html: rows as one string; each <tr> keyed by data-job (others by position). Unchanged rows stay in the DOM.
+  const t = document.createElement('template'); t.innerHTML = html;
+  const want = [...t.content.children], old = new Map([...tbody.children].map((el, i) => [el.dataset.job || '#' + i, el]));
+  const nodes = want.map((el, i) => { const k = el.dataset.job || '#' + i, cur = old.get(k);
+    if (cur && cur._h === el.outerHTML) return cur; el._h = el.outerHTML; return el; });
+  nodes.forEach((el, i) => { if (tbody.children[i] !== el) tbody.insertBefore(el, tbody.children[i] || null); });
+  while (tbody.children.length > nodes.length) tbody.lastElementChild.remove();
+}
+function focusKey(a) {
+  if (!a || a === document.body) return null;
+  if (a.id) return '#' + CSS.escape(a.id);
+  for (const k of ['data-qf', 'data-tagf', 'data-pick', 'data-bulk', 'data-ptab', 'data-sort', 'data-win', 'data-go', 'data-f', 'data-act'])
+    if (a.hasAttribute(k)) return `[${k}="${CSS.escape(a.getAttribute(k))}"]` + (a.dataset.n ? `[data-n="${CSS.escape(a.dataset.n)}"]` : '');
+  return null;
+}
+function render() {
+  if (!S) return;
+  localize();
+  const key = focusKey(document.activeElement);
+  renderTop(); renderShelf(); renderNowJobs(); renderProd(); renderQueue(); renderTide(); renderHistory();
+  if (key && (document.activeElement === document.body || !document.activeElement)) { const el = [...document.querySelectorAll(key)].find(x => x.offsetParent); if (el) el.focus({preventScroll: true}); }
+}
+function offline() {
+  $('#dot').className = 'dot bad';
+  $('#say').innerHTML = `Can't reach GapRunner.<small>${lastOk ? `Last answer ${dur((Date.now() - lastOk) / 1000)} ago. ` : ''}It may be restarting; this page keeps trying.</small>`;
+}
+function showTab() {
+  const tab = curTab(), [, job, sub] = (location.hash || '').slice(1).split('/');
+  if (job && S && (S.jobs[decodeURIComponent(job)] || qOf(decodeURIComponent(job)))) { if (PANE !== decodeURIComponent(job)) { openPane(decodeURIComponent(job), sub, true); return; } }
+  else if (!job && PANE) { closePane(true); return; }
+  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.dataset.tab !== tab));
+  document.querySelectorAll('#tabs a').forEach(a => a.getAttribute('href') === '#' + tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
+  if (S) render();
+}
+window.addEventListener('hashchange', showTab);
+window.addEventListener('resize', () => { if (S) { renderShelf(); renderTide(); renderHistory(); } });
+setInterval(() => {
+  const age = lastOk ? (Date.now() - lastOk) / 1000 : null;
+  $('#age').innerHTML = age == null ? '' : age < 8 && !document.hidden ? '<span class="livedot" aria-hidden="true"></span>live' : `updated ${dur(age)} ago`;
+  if (lastOk && Date.now() - lastOk > 150000) offline();
+}, 1000);
+showTab();
+refresh(true);
+</script>
+</body>
+</html>

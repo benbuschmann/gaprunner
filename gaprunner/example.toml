@@ -1,0 +1,38 @@
+# A minimal GapRunner config: one model server, no jobs yet, shadow mode.
+# Print this again with `gaprunner example`. Every field: docs/CONFIG.md.
+#
+# Before you start: run your model server with a way to sleep. For vLLM:
+#   VLLM_SERVER_DEV_MODE=1 vllm serve <model> --enable-sleep-mode --port 8000
+# GapRunner talks to it at `upstream` and puts a gate in front of it at `listen`; point your clients at the gate.
+
+[gaprunner]
+mode = "shadow"                       # watch and learn; log what it WOULD do. Set "live" after reviewing the log.
+state_dir = "~/.local/state/gaprunner"
+# gpu_index = 0                       # default: the GPU with the most memory (an index or a "GPU-..." UUID works)
+ui_listen = "127.0.0.1:8096"          # the web page; keep it on loopback or a private network (see SECURITY.md)
+ui_pin_file = "~/.config/gaprunner/pin"   # a file holding the PIN changes require; missing or empty = read-only
+
+[policy]
+max_added_wait_s = 5                  # most a request may wait for jobs to step aside and the service to wake
+reserve_gib = 4                       # GPU memory always kept free
+
+[[service]]
+name = "prod"                         # any name; the page and the docs call it your service
+driver = "vllm"                       # vllm | sglang | park-protocol | command
+upstream = "http://127.0.0.1:8000"    # where the model server listens
+listen = "127.0.0.1:8100"             # GapRunner's gate: send requests here instead of to the server
+gpu_gib = 40                          # about how much GPU memory the server uses when awake
+idle_park_s = 30                      # put it to sleep after this much quiet, but only when a job can use the time
+
+# Add jobs once shadow mode looks right. A job that runs beside the service and resumes from its own checkpoints:
+#
+# [[job]]
+# name = "nightly-eval"
+# goal = "Score the current model on my eval set; done when results.json is written"
+# driver = "restart"                  # step aside = stop; come back = run start_cmd again (it resumes)
+# start_cmd = "python3 eval.py --resume"
+# workdir = "~/evals"
+# coexist = "yield"                   # run beside the service, pausing while it answers
+# progress_cmd = "python3 eval.py --progress"   # prints e.g. "120/500"
+# [job.running]
+# hbm_gib = 20

@@ -1,0 +1,26 @@
+# Example systemd unit for GapRunner.
+#
+#   sudo useradd --system --create-home gaprunner          # or use your own account (User= below)
+#   sudo -u gaprunner python3 -m venv /opt/gaprunner/venv && sudo /opt/gaprunner/venv/bin/pip install gaprunner
+#   sudo mkdir -p /etc/gaprunner && gaprunner example | sudo tee /etc/gaprunner/gaprunner.toml   # then edit it
+#   sudo cp gaprunner.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now gaprunner
+#
+# systemd treats a # only at the start of a line as a comment, so notes go on their own lines.
+[Unit]
+Description=GapRunner: GPU jobs in the idle gaps of a model server
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+# The account that owns the config and the state directory (~/.local/state/gaprunner by default).
+User=gaprunner
+ExecStart=/opt/gaprunner/venv/bin/gaprunner run /etc/gaprunner/gaprunner.toml
+Restart=always
+RestartSec=2
+# Jobs GapRunner launches run in their own process groups. KillMode=process makes a GapRunner restart or upgrade
+# leave them running (it finds them again on start); the default (control-group) would kill every job.
+KillMode=process
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

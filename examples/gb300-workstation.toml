@@ -1,0 +1,49 @@
+# Example: a big single-GPU workstation (an NVIDIA DGX Station GB300: 252 GB HBM, 494 GB CPU memory over NVLink-C2C)
+# running one large model server ("prod") all day, with a benchmark and a LoRA run filling its idle gaps.
+# The times are measurements from one such machine (2026-10-23); GapRunner refines them from every real swap.
+# Start from `gaprunner example` instead if you want the smallest working config.
+[gaprunner]
+mode = "shadow"                       # start here: learn prod's gaps and log decisions; switch to "live" after review
+state_dir = "~/.local/state/gaprunner"
+gpu_index = 0
+gpu_total_gib = 250
+window_file = "~/.local/state/gaprunner/WINDOW"  # touch to open a window for slow (window-only) jobs
+
+[policy]
+p_min = 0.75                # admit a job when the gap is at least 75% likely to last...
+worth_factor = 3            # ...3x the job's park + resume time
+max_added_wait_s = 5        # a prod request may wait at most this for a job to park + prod to wake
+reserve_gib = 4
+starvation_s = 3600
+juggle_s = 15
+
+[[service]]
+name = "prod"
+driver = "vllm"                       # a ~200 GB model on vLLM, --enable-sleep-mode, VLLM_SERVER_DEV_MODE=1
+upstream = "http://127.0.0.1:8000"
+listen = "127.0.0.1:18950"            # point clients (or a router such as llama-swap) here
+gpu_gib = 205
+idle_park_s = 30
+wake_s = 1.2                          # seed; level-1 wake of ~200 GB at ~375 GB/s pinned
+park_s = 1.0
+
+[[job]]
+name = "ttb4-bench"
+goal = "Score the current model on the agent benchmark; done when every item has a result"
+driver = "command"                    # item-resume: stop at an item boundary, restart with resume
+gpu_gib = 60
+park_s = 0.1
+resume_s = 1.5
+park_cmd = "systemctl --user stop ttb4-bench"
+resume_cmd = "systemctl --user start ttb4-bench"
+state_cmd = "systemctl --user is-active -q ttb4-bench && echo hot || echo parked"
+
+[[job]]
+name = "lora-9b"
+goal = "LoRA fine-tune of a 9B model for tool use; done when the last step is saved"
+driver = "cuda-checkpoint"            # freeze in place: 3.4 s park / 2.5 s resume for ~30 GB, bit-identical
+pid_file = "~/.local/state/gaprunner/lora-9b.pid"
+sudo = true
+gpu_gib = 32
+park_s = 3.4
+resume_s = 2.5

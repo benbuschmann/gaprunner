@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaprunner"
+version = "0.18.1"
+description = "Resumable background GPU jobs that yield to your local AI services"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["gpu", "scheduler", "vllm", "sglang", "llm", "inference", "cuda-checkpoint"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: GPU :: NVIDIA CUDA",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Distributed Computing",
+]
+
+[project.urls]
+Homepage = "https://github.com/benbuschmann/gaprunner"
+Documentation = "https://github.com/benbuschmann/gaprunner/tree/main/docs"
+Issues = "https://github.com/benbuschmann/gaprunner/issues"
+Changelog = "https://github.com/benbuschmann/gaprunner/blob/main/CHANGELOG.md"
+
+[project.scripts]
+gaprunner = "gaprunner.cli:main"
+
+[tool.setuptools]
+packages = ["gaprunner"]
+
+[tool.setuptools.package-data]
+gaprunner = ["ui.html", "example.toml"]

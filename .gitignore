@@ -1,0 +1,11 @@
+__pycache__/
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+# local configs, state and logs: keep them out of the repo
+*.local.toml
+state/
+*.log
+REVIEW-BRIEF.md

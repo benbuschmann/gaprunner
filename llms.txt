@@ -1,0 +1,28 @@
+# GapRunner
+
+> GapRunner shares one GPU box between always-on AI services and background jobs. Idle services are parked (e.g. vLLM sleep mode) and woken on request; jobs (training, benchmarks, evals, renders) run beside the services when they fit, or in the services' idle gaps, chosen by measured swap cost against the learned gap distribution. Python 3.11+, standard library only, Apache-2.0.
+
+Agents operating on a machine GapRunner manages must not kill, stop or start GPU work outside it. Read state from the web API and queue work as recipes.
+
+## Docs
+
+- [README](README.md): what it is, quick start, drivers, safety rules, replay results
+- [Agent guide](docs/AGENT-GUIDE.md): rules for AI agents, the read API, how to get work onto the GPU
+- [Job recipes](docs/RECIPES.md): every `[[job]]` field, placements (`coexist`), drivers, lifecycle, checklist
+- [Design](docs/DESIGN.md): components, decisions, roadmap
+- [Prior art](docs/PRIOR-ART.md): related projects and what GapRunner borrows from each
+- [Agent skill](skills/gaprunner/SKILL.md): a drop-in skill telling coding agents how to behave on a GapRunner machine
+
+## Code
+
+- [gaprunner/scheduler.py](gaprunner/scheduler.py): pure decision rules (`decide`, `plan_wake`, `explain`), shared by the daemon and replay
+- [gaprunner/runner.py](gaprunner/runner.py): the daemon: state, transitions, recipes, history, audit
+- [gaprunner/drivers.py](gaprunner/drivers.py): how each kind of service or job parks and resumes
+- [gaprunner/gate.py](gaprunner/gate.py): the per-service HTTP proxy that holds requests while a service wakes
+- [gaprunner/ui.py](gaprunner/ui.py) and [gaprunner/ui.html](gaprunner/ui.html): web UI and JSON API
+
+## Optional
+
+- [gaprunner/example.toml](gaprunner/example.toml) (also `gaprunner example`): a minimal config
+- [examples/gb300-workstation.toml](examples/gb300-workstation.toml): a fuller real configuration (DGX Station GB300)
+- [gaprunner/replay.py](gaprunner/replay.py): replay a request trace through the rules
