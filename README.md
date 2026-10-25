@@ -2,7 +2,7 @@
 
 **Run training, evals and benchmarks in the idle gaps of your always-on local model, and give the GPU back the moment a request arrives.**
 
-![The GapRunner page: the model server asleep, an eval job holding 76 GiB of GPU memory, and the last hour of the two taking turns](docs/images/gaprunner-now.png)
+![The GapRunner page: the model server asleep, an eval job holding 76 GiB of GPU memory, and the last six hours of the two taking turns](docs/images/gaprunner-now.png)
 
 A local model server sits on the GPU all day. Between requests it is mostly idle, while your training runs, evals
 and benchmarks wait for a free GPU. GapRunner hands those idle gaps to the waiting jobs. When a request comes in, the
