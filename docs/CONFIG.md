@@ -82,6 +82,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 |---|---|---|
 | `driver` | | `restart`, `cuda-checkpoint`, `vllm`, `sglang`, `park-protocol`, `command` |
 | `goal`, `notes`, `kind`, `tags` | | what it's for and when it's done; free text; a label; tags for the page |
+| `color` | by queue position | the job's colour on the page: blue, orange, teal, purple, olive, pink, indigo or amber (jobs otherwise skip the services' colours) |
 | `start_cmd`, `workdir`, `env` | none, `.`, `{}` | how GapRunner starts it (in its own process group, output to `<state_dir>/job-<name>.log`) |
 | `log_file` | that log | a log GapRunner should show and watch instead |
 | `coexist` | `"no"` | `no` (only while services sleep), `share` (beside them), `yield` (beside them, pausing while they answer) |

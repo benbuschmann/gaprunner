@@ -832,10 +832,16 @@ function holderOrder() {
   if (!S) return [];
   return [...Object.keys(S.services), ...S.queue.map(q => q.name).filter(n => S.jobs[n]), ...Object.keys(S.jobs).filter(n => !qOf(n))];
 }
+const COLOR_NAMES = ['blue', 'orange', 'teal', 'purple', 'olive', 'pink', 'indigo', 'amber'];   // = SLOTS, in order
 function color(name) {
+  // services take the first colours; jobs cycle through the rest, so a job never looks like a service.
+  // A recipe can name its job's colour (color = "orange").
   const base = S && Object.keys(S.services).find(sv => name === sv || name.startsWith(sv + ': ')) || name;   // "prod: glm" draws as prod
-  const i = holderOrder().indexOf(base);
-  return i >= 0 ? `var(${SLOTS[i % SLOTS.length]})` : 'var(--overflow)';
+  const named = S && S.jobs[base] && COLOR_NAMES.indexOf(S.jobs[base].color);
+  if (named >= 0) return `var(${SLOTS[named]})`;
+  const order = holderOrder(), i = order.indexOf(base), k = S ? Object.keys(S.services).length : 0;
+  if (i < 0) return 'var(--overflow)';
+  return `var(${SLOTS[i < k ? i % SLOTS.length : k + (i - k) % Math.max(1, SLOTS.length - k)]})`;
 }
 function inkFor(c) {
   // dark or white label text on a coloured block, by the block's lightness

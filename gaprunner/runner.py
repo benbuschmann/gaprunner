@@ -1059,6 +1059,7 @@ class Runner:
                                    "calibration": _calib_summary(self, j.name),
                                    "gpu_gib": j.gpu_gib, "driver": e["spec"]["driver"], "kind": e["spec"].get("kind", ""),
                                    "queued": j.name in q, "tags": self.tags_of(j.name), "summary": e.get("summary"),
+                                   "color": e["spec"].get("color"),
                                    "started_t": round(e["active_since"], 1) if e["state"] == HOT and e.get("active_since") else None,
                                    "waiting_s": None if e["waiting_since"] is None else round(now - e["waiting_since"], 1),
                                    "word": why[j.name][0], "why": why[j.name][1]}

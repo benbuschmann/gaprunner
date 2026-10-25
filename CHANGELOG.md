@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.3
+
+- Page: a job never gets a service's colour. Services take the first colours and jobs cycle through the rest (before,
+  the ninth job wrapped round to the service's blue).
+- Recipes can name a job's colour: `color = "orange"` (blue, orange, teal, purple, olive, pink, indigo or amber, the
+  page's palette, checked for colour-blind contrast in light and dark mode).
+
 ## 0.18.2
 
 - vLLM driver: when `/is_sleeping` times out (a server busy with slow model steps), the driver keeps its last real

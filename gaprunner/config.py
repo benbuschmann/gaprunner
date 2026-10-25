@@ -34,6 +34,10 @@ TIERS = ("hbm_gib", "cpu_gib", "ssd_gib")       # fast GPU memory, CPU memory, d
 COEXIST = ("no", "share", "yield")
 
 
+#: The page's job colours (light and dark variants are checked for colour-blind contrast); a recipe may pick one.
+JOB_COLORS = ("blue", "orange", "teal", "purple", "olive", "pink", "indigo", "amber")
+
+
 class ConfigError(ValueError):
     pass
 
@@ -133,6 +137,8 @@ def parse(raw):
         j.setdefault("hold", False)
         j.setdefault("window_only", False)
         j.setdefault("enabled", True)
+        if j.get("color") is not None and j["color"] not in JOB_COLORS:
+            raise ConfigError(f"job {j['name']}: color must be one of {', '.join(JOB_COLORS)}")
     for x in services + jobs:
         if x["name"] in names:
             raise ConfigError(f"duplicate name {x['name']}")

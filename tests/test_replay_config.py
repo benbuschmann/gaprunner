@@ -68,3 +68,12 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JobColorTest(unittest.TestCase):
+    def test_a_recipe_can_name_its_colour_from_the_palette_only(self):
+        base = {"service": [{"name": "p", "driver": "vllm", "upstream": "http://x", "listen": "127.0.0.1:1", "gpu_gib": 1}]}
+        job = {"name": "j", "driver": "restart", "gpu_gib": 1, "start_cmd": "true"}
+        self.assertEqual(C.parse({**base, "job": [{**job, "color": "orange"}]})["jobs"][0]["color"], "orange")
+        with self.assertRaises(C.ConfigError):
+            C.parse({**base, "job": [{**job, "color": "mauve"}]})
