@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0
 
 - Jobs that lose work when they step aside. A `restart` job loses what it did since its last saved point, so a job with
   long steps (30-minute training steps) could be stopped before every save in a run of short quiet spells. GapRunner now
