@@ -37,7 +37,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `starvation_s` | `3600.0` | a job waiting this long goes to the front of the queue |
 | `reserve_gib` | `4.0` | GPU memory always kept free |
 | `cpu_floor_gib` | `16.0` | CPU memory always kept free (no start or sleep below it) |
-| `max_active_jobs` | `0` (no limit) | at most this many jobs on the GPU at once; the rest wait their turn in queue order (qBittorrent's "Max active torrents") |
+| `max_active_jobs` | `0` (no limit) | at most this many jobs on the GPU at once; the rest wait their turn in queue order (qBittorrent's "Max active torrents"). A job higher in the queue that could start pushes the active job lowest in the queue aside, unless that job would lose work by stepping aside |
 | `lossy_p_min` | `0.5` | a job that loses work starts in a quiet spell only when it's at least this likely to last until its next saved point |
 | `cold_start_after_s` | `120.0` | until 20 quiet spells are learned, jobs wait for this much quiet |
 | `park_only_if_work` | `true` | put a service to sleep only when a job can use the time |

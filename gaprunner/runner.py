@@ -833,7 +833,7 @@ class Runner:
                             sp["order"], sp["hold"], sp["window_only"], sp["enabled"], e["waiting_since"], e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
-                            float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0))
+                            float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"]))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
                         self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
 

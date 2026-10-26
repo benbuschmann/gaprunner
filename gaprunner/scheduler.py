@@ -61,6 +61,7 @@ class Job:
     blocked_by: str = None         # a dependency that hasn't finished (or failed), in words
     run_cpu_gib: float = 0.0       # extra CPU memory it takes when it starts or resumes
     save_s: float = 0.0            # loses unsaved work when it steps aside: running time to its next saved point
+    loses_work: bool = False       # stepping aside throws away work since its last saved point (restart jobs)
 
 
 @dataclass
@@ -229,6 +230,23 @@ def decide(snap, gaps, policy):
         sum(j.gpu_gib for j in snap.jobs if j.coexist != "no" and j.state in (HOT, RESUMING))
     side_reclaim = max((sv.wake_s for sv in snap.services), default=0.0) + \
         sum(j.park_s for j in snap.jobs if j.coexist == "no" and j.state in (HOT, RESUMING))
+    if limit and not has_slot():
+        # queue order decides who holds the slots: a job higher in the queue that could start now pushes the active
+        # job lowest in the queue aside, if that job keeps its place when it steps aside (one that would lose work
+        # keeps its slot until it steps aside or finishes). Queue position only: the starvation guard reorders
+        # waiting jobs, it never pushes a running one aside.
+        want = sorted((j for j in waiting if not (j.coexist == "yield" and busy)), key=lambda j: j.order)
+        movable = sorted((j for j in snap.jobs if j.state == HOT and not j.pinned and not j.loses_work),
+                         key=lambda j: -j.order)
+        if want and movable and want[0].order < movable[0].order:
+            w, a = want[0], movable[0]
+            asleep = all(s.state in (PARKED, STOPPED) for s in snap.services)
+            could = (w.gpu_gib <= free + a.gpu_gib and cpu_ok(w.run_cpu_gib) and
+                     (gap_worth_it(snap, w, gaps, policy)[0] if asleep else w.coexist != "no"))
+            if could and not any(x.kind == "park_job" and x.target == a.name for x in acts):
+                acts.append(Action("park_job", a.name, f"makes room for {w.name}, higher in the queue "
+                                                        f"(max active jobs {limit})"))
+                return acts
     for j in sorted(waiting, key=rank):
         if not has_slot(j):
             break

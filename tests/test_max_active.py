@@ -47,6 +47,27 @@ class MaxActiveJobsTest(unittest.TestCase):
         s = snap(svc_state=PARKED, jobs=[job("a", order=0, parked_at=995), job("b", order=1)])
         self.assertEqual(kinds(decide(s, LONG, POL)), [("resume_job", "b")])
 
+    def test_a_job_higher_in_the_queue_pushes_the_lowest_aside(self):
+        s = snap(svc_state=PARKED, jobs=[job("a", order=0), job("low", state=HOT, order=1)])
+        acts = decide(s, LONG, ONE)
+        self.assertEqual(kinds(acts), [("park_job", "low")])
+        self.assertIn("makes room for a", acts[0].reason)
+        # once it has stepped aside, the job higher in the queue takes the slot
+        s = snap(svc_state=PARKED, jobs=[job("a", order=0), job("low", order=1, parked_at=999)])
+        self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "a")])
+
+    def test_no_push_when_it_would_lose_work_or_gain_nothing(self):
+        lossy = snap(svc_state=PARKED, jobs=[job("a", order=0), job("low", state=HOT, order=1, loses_work=True)])
+        self.assertEqual(decide(lossy, LONG, ONE), [])                     # keeps its slot until it steps aside
+        big = snap(svc_state=PARKED, jobs=[job("a", gib=99, order=0), job("low", state=HOT, gib=10, order=1)])
+        self.assertEqual(decide(big, LONG, ONE), [])                       # a wouldn't fit even then
+        lower = snap(svc_state=PARKED, jobs=[job("a", state=HOT, order=0), job("low", order=1)])
+        self.assertEqual(decide(lower, LONG, ONE), [])                     # only upward in the queue
+        starving = snap(svc_state=PARKED, jobs=[job("a", state=HOT, order=0), job("low", order=1, waiting_since=0)])
+        self.assertEqual(decide(starving, LONG, ONE), [])                  # starvation never pushes a running job
+        free = snap(svc_state=PARKED, jobs=[job("a", order=0), job("low", state=HOT, order=1)])
+        self.assertEqual(kinds(decide(free, LONG, POL)), [("resume_job", "a")])   # no limit: both run
+
     def test_config_wants_a_whole_number(self):
         base = {"service": [{"name": "prod", "driver": "vllm", "upstream": "http://x", "listen": "127.0.0.1:0", "gpu_gib": 1}]}
         self.assertEqual(C.parse({**base, "policy": {"max_active_jobs": 2}})["policy"].max_active_jobs, 2)

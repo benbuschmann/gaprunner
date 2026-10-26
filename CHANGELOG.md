@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0
+
+- Max active jobs follows queue order for running jobs too. When the limit is full and a job higher in the queue could
+  start, the active job lowest in the queue steps aside to make room ("makes room for …, higher in the queue"), as in
+  qBittorrent. Before, the higher job waited until the lower one happened to step aside, which in a quiet spell could
+  take hours. A job that loses work when it steps aside (`loses_work`) is never pushed aside; it keeps its slot until
+  it steps aside or finishes. Only queue position counts: the starvation guard never pushes a running job aside.
+
 ## 0.20.1
 
 - Max active jobs: when a job steps aside it waits `juggle_s` (15 s) before it may come back, and in that window a
