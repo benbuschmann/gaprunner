@@ -80,6 +80,8 @@ class LiveTest(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: FakeJob.registry["bench"].st == "hot"))
         self.assertTrue(prod.sleeping)
         self.assertEqual(set(gpu.resident), {"bench"})          # never both on the card (60 + 70 > 100)
+        # the job reports hot a moment before the runner writes its "resume" event: wait for the event too
+        self.assertTrue(self.wait_for(lambda: "resume" in [e["event"] for e in events(r)]))
         ev = [e["event"] for e in events(r)]
         self.assertLess(ev.index("park"), ev.index("resume"))
 
