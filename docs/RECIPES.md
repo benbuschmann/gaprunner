@@ -8,8 +8,8 @@ A recipe is one `[[job]]` entry in the config. It tells GapRunner how to start t
 [[job]]
 name = "lora-9b"                       # unique; shown in the UI and the queue
 kind = "training"                      # free text: training, benchmark, eval, render, ...
-goal = "LoRA r16 on Qwen3.5-9B for tool use: 50 GRPO steps; done when step 50 is saved and its eval is logged"
-notes = "follow-up to the 10-22 16k run"   # free text, shown in the UI
+goal = "LoRA fine-tune of a 9B model for tool use: 50 steps; done when step 50 is saved and its eval is logged"
+notes = "second try, longer context"     # free text, shown in the UI
 tags = ["training", "9b"]              # optional; the UI filters and searches by tag (editable there too)
 progress_cmd = "tail -1 runs/grpo/metrics.jsonl | jq -r '\"\\(.step)/50\"'"   # prints 12/50 (24% or 0.24 work too)
 health_cmd = "curl -sf http://127.0.0.1:18190/health"     # optional; non-zero exit = unhealthy

@@ -35,8 +35,8 @@ class ReplayTest(unittest.TestCase):
 
     def test_yield_format(self):
         p = os.path.join(tempfile.mkdtemp(), "y.log")
-        open(p, "w").write("2026-10-23T10:00:00Z FREEZE seat\n2026-10-23T10:00:30Z THAW GLM idle 5s\n"
-                           "2026-10-23T10:10:00Z FREEZE seat\n")
+        open(p, "w").write("2026-10-23T10:00:00Z FREEZE model busy\n2026-10-23T10:00:30Z THAW model idle 5s\n"
+                           "2026-10-23T10:10:00Z FREEZE model busy\n")
         [ev] = replay.load_yield([p])
         self.assertEqual([e for _, e in ev], ["start", "end", "start"])
         self.assertEqual(ev[1][0] - ev[0][0], 25)

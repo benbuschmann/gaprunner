@@ -28,15 +28,15 @@ wake_s = 1.2                          # seed; level-1 wake of ~200 GB at ~375 GB
 park_s = 1.0
 
 [[job]]
-name = "ttb4-bench"
+name = "agent-bench"
 goal = "Score the current model on the agent benchmark; done when every item has a result"
 driver = "command"                    # item-resume: stop at an item boundary, restart with resume
 gpu_gib = 60
 park_s = 0.1
 resume_s = 1.5
-park_cmd = "systemctl --user stop ttb4-bench"
-resume_cmd = "systemctl --user start ttb4-bench"
-state_cmd = "systemctl --user is-active -q ttb4-bench && echo hot || echo parked"
+park_cmd = "systemctl --user stop agent-bench"
+resume_cmd = "systemctl --user start agent-bench"
+state_cmd = "systemctl --user is-active -q agent-bench && echo hot || echo parked"
 
 [[job]]
 name = "lora-9b"
