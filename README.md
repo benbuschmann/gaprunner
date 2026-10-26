@@ -1,15 +1,49 @@
 # GapRunner
 
-**Run training, evals and benchmarks in the idle gaps of your always-on local model, and give the GPU back the moment a request arrives.**
+**A job queue for the GPU that runs your local model. Line up training, evals and benchmarks; GapRunner runs them in
+order, beside the model when they fit and in its idle gaps when they don't, and gives the GPU back the moment a
+request arrives.**
 
 ![The GapRunner page: the model server asleep, an eval job holding 76 GiB of GPU memory, and the last six hours of the two taking turns](docs/images/gaprunner-now.png)
 
-A local model server sits on the GPU all day. Between requests it is mostly idle, while your training runs, evals
-and benchmarks wait for a free GPU. GapRunner hands those idle gaps to the waiting jobs. When a request comes in, the
-jobs step aside (they sleep, freeze or stop), the model wakes, and the request is answered as usual.
+A machine like a DGX Station runs a model server all day and has a list of other GPU work waiting: fine-tunes, evals,
+benchmark sweeps. Something has to decide what runs next, keep jobs from fighting over memory, notice when one
+stalls, and get it out of the way when the model needs the GPU. GapRunner does that, in two parts:
+
+- **Job and queue management.** Jobs go into a queue with an order, limits and dependencies, and GapRunner runs them
+  when there is room for them. You see what's running, how far along it is, when the queue should be done, and why a
+  job is waiting. This matters even when the model is rarely idle: with many agents calling it all day, the queue
+  still decides what gets the rest of the GPU, and in what order.
+- **The model's idle gaps.** Between requests the model is often idle. GapRunner puts it to sleep and lets queued jobs
+  use the GPU. When a request comes in, the jobs step aside (they sleep, freeze or stop), the model wakes, and the
+  request is answered as usual.
 
 It is one Python package (standard library only, Apache-2.0) that runs beside your model server on a single NVIDIA
 GPU. It is early (0.x) and has been running in production on one NVIDIA DGX Station GB300 since October 2026.
+
+## Job and queue management
+
+| | |
+|---|---|
+| **Queue** | Order jobs by dragging them on the page or through the API. `after` chains run B once A has finished; holds keep a job waiting until you start it; a starvation guard moves a job that has waited too long to the front. |
+| **Max active jobs** | At most N jobs on the GPU at once (`max_active_jobs`); the rest wait in queue order. A job higher in the queue pushes the lowest active one aside, unless that job would lose work by stepping aside. |
+| **Controls** | Start, Wind down (stop at the job's next saved point), Stop, Pause and Clear, on one job or many at once. |
+| **Progress and timing** | Each job reports its progress (`progress_cmd`). GapRunner estimates the GPU-hours left, when the queue should be done, and shows what's coming up next. |
+| **Health** | Stalled jobs and failing health checks are flagged, with alerts through `notify_cmd` (a phone push, a webhook). `max_hours` caps how long a job may run before it is held. |
+| **Memory** | Each recipe states its GPU, CPU and disk use, measured for you by `gaprunner calibrate`. A job starts only when the driver shows room for it, keeping a GPU reserve and a host-memory floor. |
+| **Saved work** | A job that loses unsaved work when stopped gets only quiet spells long enough to reach its next saved point, and every lost stretch is recorded. |
+| **Work you run by hand** | Claims: a process you started yourself is counted in memory, or holds the queue while it runs. |
+| **Recipes** | A job is a TOML entry: how to start it, its goal, progress, saved-point, summary and health commands, its memory per tier, a colour. |
+| **For agents** | An [agent guide](docs/AGENT-GUIDE.md), a drop-in [skill](skills/gaprunner/SKILL.md) and [llms.txt](llms.txt), so coding agents can read state, queue jobs and explain why a job is waiting. |
+
+## Sharing the GPU with the model
+
+| | |
+|---|---|
+| **Placements** | Each job says where it may run: beside the model (`share`), beside it but pausing its compute while the model answers (`yield`), only while the model sleeps (`no`), or only in slow-wake / no-model periods (`window_only`). |
+| **Engines** | Several engines behind one service name, switched by hand, from the page or on a daily schedule. The gate rewrites the request's model name, so clients keep one alias. `warm_cmd` brings an engine back to full speed after a wake. |
+| **Periods for big jobs** | "Slow-wake" periods let slower jobs run while the model sleeps (requests may wait longer); "No prod" periods stop the model so a big job gets the whole GPU, then start it again. |
+| **Web page** | One self-contained HTML file (no CDN, no build step) with live updates. See below. |
 
 ## One night on a GB300 Station
 
@@ -46,26 +80,16 @@ clients ──> gate (one per model service) ──> your model server (vLLM, SG
    server. It sees every request, wakes the model if it is asleep, holds the request until the model is ready, and
    streams the answer back. Health probes (`/health`, `/v1/models`, `/metrics`, ...) pass straight through and never
    wake it.
-2. **The scheduler** decides, once a second, who should hold the GPU. It learns how long your service's quiet spells
-   last and measures how long each job takes to step aside and come back, then starts work when a gap is worth the
-   swap. An idle model is put to sleep only when a waiting job can use the time; otherwise its next request costs
+2. **The scheduler** decides, once a second, who should hold the GPU. It takes jobs in queue order, within the
+   max-active limit and the memory the driver shows free. For jobs that need the model asleep, it learns how long your
+   service's quiet spells last and measures how long each job takes to step aside and come back, then starts work
+   when a gap is worth the swap. An idle model is put to sleep only when a waiting job can use the time; otherwise its next request costs
    nothing.
 3. **Drivers** do the stepping aside: vLLM or SGLang sleep mode for model servers, cuda-checkpoint to freeze a CUDA
    process in place, a restart from the job's own checkpoint, or your own shell hooks.
 
 The scheduler is a pure function of a snapshot, so the daemon and `gaprunner replay` run identical rules. See the
 [design](docs/DESIGN.md).
-
-## Features
-
-| | |
-|---|---|
-| **Placements** | Each job says where it may run: beside the model (`share`), beside it but pausing its compute while the model answers (`yield`), only while the model sleeps (`no`), or only in slow-wake / no-model periods (`window_only`). |
-| **Queue** | Queue order, `after` chains (run B once A has finished), a starvation guard, a host-memory floor and a GPU memory reserve. |
-| **Engines** | Several engines behind one service name, switched by hand, from the page or on a daily schedule. The gate rewrites the request's model name, so clients keep one alias. |
-| **Recipes** | A job is a TOML entry: how to start it, its goal, progress, saved-point, summary and health commands, its memory per tier, a colour. `gaprunner calibrate` measures the numbers for you; `warm_cmd` brings an engine back to full speed after a wake. |
-| **Web page** | One self-contained HTML file (no CDN, no build step) with live updates. See below. |
-| **For agents** | An [agent guide](docs/AGENT-GUIDE.md), a drop-in [skill](skills/gaprunner/SKILL.md) and [llms.txt](llms.txt), so coding agents can read state, queue jobs and explain why a job is waiting. |
 
 ### Drivers
 
@@ -84,7 +108,7 @@ The scheduler is a pure function of a snapshot, so the daemon and `gaprunner rep
   model service with its state, measured sleep and wake times, and engine stats (tokens/s, time to first token, KV
   cache use, prefix-cache hits).
 - **Jobs:** the queue as a table with search, tags, drag to reorder and bulk actions; a details pane with the job's
-  log, recipe, run history and its own highlights (from `summary_cmd`); a timeline of what is coming up.
+  log, recipe, run history and its own best results so far (from `summary_cmd`); a timeline of what is coming up.
 - **History** and **Help** tabs. Every job and service says in a sentence why it is (or isn't) running.
 - Engine switching, "Slow-wake" periods (slower jobs may run while the model sleeps; requests may wait longer) and
   "No prod" periods (the model is stopped so a big job gets the whole GPU, then started again).
