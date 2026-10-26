@@ -1709,7 +1709,7 @@ const EV = {
   service_release: ['prod gave back cached CPU memory', 'prod'], calibrate_start: ['measuring started', 'jobs'], calibrate_end: ['measuring finished', 'jobs'],
   overlap_risk: ['woke while memory was still in use', 'bad'], resume_skipped: ["didn't come back: no room", 'jobs'], tick_error: ['GapRunner error', 'bad'],
   gpu_hold: ['GPU hold', 'bad'], gpu_hold_cleared: ['GPU hold cleared', 'jobs'], max_hours: ['reached its time limit', 'jobs'],
-  would: ['would act (shadow mode)', 'sys'], result_cleared: ['started again: last exit forgotten', 'you'], park_failed: ['failed to step aside', 'bad'], lost_work: ['lost unsaved work stepping aside', 'jobs'], resume_failed: ['failed to come back', 'bad'], start_failed: ['failed to start', 'bad'],
+  would: ['would act (shadow mode)', 'sys'], result_cleared: ['started again: last exit forgotten', 'you'], park_failed: ['failed to step aside', 'bad'], lost_work: ['lost unsaved work stepping aside', 'jobs'], evicted: ['stopped to free host memory for a job higher in the queue', 'jobs'], evict_failed: ['could not be stopped to free host memory', 'bad'], resume_failed: ['failed to come back', 'bad'], start_failed: ['failed to start', 'bad'],
 };
 // "start" is both GapRunner starting (no target) and a job starting (target): tell them apart
 const evWord = e => e.event === 'start' && e.target ? 'job started' : (EV[e.event] || [String(e.event).replace(/_/g, ' ')])[0];

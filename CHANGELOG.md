@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0
+
+- Host memory follows queue order. When a job needs to step aside by freezing or sleeping and its copy doesn't fit in
+  host memory, GapRunner first stops jobs that sit frozen or asleep in host memory and are lower in the queue, last
+  first, until there is room (an `evicted` event each). They start again later from their own checkpoints. Only if
+  that isn't enough does the job itself fall back to stopping. A job higher in the queue is never stopped for a lower
+  one.
+
 ## 0.21.0
 
 - Max active jobs follows queue order for running jobs too. When the limit is full and a job higher in the queue could

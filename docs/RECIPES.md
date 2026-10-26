@@ -101,7 +101,7 @@ A service that should be up but hasn't answered for 30 s is flagged too. A flag 
 
 ## Sleep if there's room, otherwise stop (`fallback`)
 
-A job that parks by sleeping (`cuda-checkpoint`, `vllm`, `command`) moves its GPU state into host RAM. With `fallback = "restart"` (and a `start_cmd`), GapRunner first checks there's room: if host memory minus the extra the frozen copy needs (`parked.cpu_gib - running.cpu_gib`) would fall below `policy.cpu_floor_gib`, it stops the job instead (SIGTERM to its process group) and runs `start_cmd` again later, so the job resumes from its own checkpoint. Big jobs that can never sleep (their host RAM is already spoken for) simply use `driver = "restart"`.
+A job that parks by sleeping (`cuda-checkpoint`, `vllm`, `command`) moves its GPU state into host RAM. With `fallback = "restart"` (and a `start_cmd`), GapRunner first checks there's room: if host memory minus the extra the frozen copy needs (`parked.cpu_gib - running.cpu_gib`) would fall below `policy.cpu_floor_gib`, it stops the job instead (SIGTERM to its process group) and runs `start_cmd` again later, so the job resumes from its own checkpoint. Before falling back, GapRunner makes room: it stops jobs that sit frozen or asleep in host memory and are lower in the queue than this one, last in the queue first (each restarts later from its own checkpoint). A job higher in the queue is never stopped to make room for a lower one. Big jobs that can never sleep (their host RAM is already spoken for) simply use `driver = "restart"`.
 
 ## Jobs that lose work when they step aside
 

@@ -650,6 +650,10 @@ class Runner:
             self.audit("wound_down", target=name, reason="it was paused by hand and had to step aside for a service")
         extra = float(j["spec"]["parked"]["cpu_gib"] or 0) - float(j["spec"]["running"]["cpu_gib"] or 0)
         free = self.host_mem()
+        if free is not None and extra > 0 and free - extra < self.policy.cpu_floor_gib:
+            # its frozen copy doesn't fit: first stop frozen jobs lower in the queue, last first
+            if self._evict_for_host(name, self.policy.cpu_floor_gib - (free - extra)):
+                free = self.host_mem()
         drivers_ = [d for d in (j["driver"], j["fallback"]) if d is not None]
         saved = [d.timeout for d in drivers_]
         if cap is not None:
@@ -701,6 +705,34 @@ class Runner:
         j["parked_at"] = self.clock()
         j["waiting_since"] = self.clock()
         return ok
+
+    def _evict_for_host(self, name, need_gib):
+        """Make room in host memory for `name` to step aside by freezing: stop jobs that sit parked with their state
+        held in host memory (frozen or asleep) and are lower in the queue than `name`, last in the queue first, until
+        about need_gib is freed. A stopped job starts again later from its own checkpoint (start_cmd), so it loses
+        only the work since its last saved point. Returns the GiB freed (from the stopped processes' RSS)."""
+        q = C.queue_overrides(self.top)
+        order = lambda n: q.get(n, {}).get("order", self.job[n]["spec"].get("order", 0))
+        mine = order(name)
+        held = [n for n, e in self.job.items() if n != name and e["state"] == PARKED and order(n) > mine
+                and e["spec"].get("start_cmd") and e["driver"].pids()]
+        freed = 0.0
+        for n in sorted(held, key=order, reverse=True):
+            if freed >= need_gib:
+                break
+            e = self.job[n]
+            pids = e["driver"].pids()
+            gib = _rss_gib(pids) or float(e["spec"]["parked"]["cpu_gib"] or 0)
+            e["expect_exit"] = True               # stopped on purpose: not a failure
+            try:
+                (e["fallback"] or D.Restart(e["spec"])).park()
+            except Exception as ex:  # noqa: BLE001 -- reported, and the next candidate is tried
+                self.audit("evict_failed", target=n, error=str(ex)[:300], reason=f"host memory for {name}")
+                continue
+            freed += gib
+            self.audit("evicted", target=n, gib=round(gib, 1),
+                       reason=f"host memory for {name}, higher in the queue; it starts again from its own checkpoint")
+        return freed
 
     def _resume_job(self, name, reason=""):
         j = self.job[name]
