@@ -1173,7 +1173,8 @@ function renderNowJobs() {
   patchRows($('#nowjobs'), list.map(n => rowHtml(n, {compact: true})).join('') + extra.join(''));
   $('#nowjobs').closest('.tablewrap').classList.toggle('hide', !list.length && !extra.length);
   const active = S.queue.filter(q => !['done', 'cleared'].includes(catOf(q.name)) && !list.includes(q.name)).length;
-  $('#nowhint').innerHTML = (list.length || extra.length ? '' : `Nothing besides ${SV()} is on the GPU, and nothing is about to start. `) + (active > 0 ? `${active} more active in the <a href="#jobs">queue</a>.` : '');
+  $('#nowhint').innerHTML = (list.length || extra.length ? '' : `Nothing besides ${SV()} is on the GPU, and nothing is about to start. `) + (active > 0 ? `${active} more active in the <a href="#jobs">queue</a>.` : '') +
+    (S.policy.max_active_jobs ? ` Max active jobs: ${S.policy.max_active_jobs} (the rest wait their turn in queue order).` : '');
 }
 function renderQueue() {
   const names = S.queue.map(q => q.name), cats = Object.fromEntries(names.map(n => [n, catOf(n)]));

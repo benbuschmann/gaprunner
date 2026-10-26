@@ -77,6 +77,8 @@ class Policy:
     cold_start_after_s: float = 120.0
     park_only_if_work: bool = True
     cpu_floor_gib: float = 16.0     # never start or park something if host memory would drop below this
+    max_active_jobs: int = 0        # at most this many jobs on the GPU at once (0 = no limit); the rest wait in
+                                    # queue order, like qBittorrent's "Max active torrents"
     lossy_p_min: float = 0.5        # a job that loses unsaved work starts in a quiet spell only when it's at least
                                     # this likely to last until the job's next saved point
 
@@ -106,6 +108,11 @@ def committed_gib(snap):
     s = sum(x.gpu_gib for x in snap.services if x.state in (HOT, RESUMING, PARKING, UNKNOWN, STARTING))
     j = sum(x.gpu_gib for x in snap.jobs if x.state in (HOT, RESUMING, PARKING, UNKNOWN))
     return s + j
+
+
+def active_jobs(snap):
+    """Jobs on the GPU or coming onto it: what policy.max_active_jobs counts."""
+    return [j for j in snap.jobs if j.state in (HOT, RESUMING)]
 
 
 def idle_elapsed(snap):
@@ -186,6 +193,15 @@ def decide(snap, gaps, policy):
             acts.append(Action("park_job", j.name, "window closed"))
     if snap.hold:
         return acts                      # drain, claim, GPU hold or settling: nothing new starts, nothing parks
+    limit = policy.max_active_jobs
+    if limit:
+        # more jobs running than the limit allows (it was just lowered): the last in the queue step aside
+        on = sorted((j for j in active_jobs(snap) if not j.pinned and j.state == HOT), key=lambda j: j.order)
+        pinned = sum(1 for j in active_jobs(snap) if j.pinned or j.state != HOT)
+        for j in on[max(0, limit - pinned):]:
+            acts.append(Action("park_job", j.name, f"over max active jobs ({limit})"))
+    slots = [limit - len(active_jobs(snap)) if limit else None]     # None: no limit
+    has_slot = lambda: slots[0] is None or slots[0] > 0
     waiting = [j for j in snap.jobs if j.state == PARKED and not j.pinned and eligible(snap, j, policy)[0]
                and not (j.parked_at is not None and snap.now - j.parked_at < policy.juggle_s)]
     busy = any(s.inflight for s in snap.services)
@@ -205,6 +221,8 @@ def decide(snap, gaps, policy):
     side_reclaim = max((sv.wake_s for sv in snap.services), default=0.0) + \
         sum(j.park_s for j in snap.jobs if j.coexist == "no" and j.state in (HOT, RESUMING))
     for j in sorted(waiting, key=rank):
+        if not has_slot():
+            break
         if j.coexist == "yield" and busy:
             continue                                  # a yield job starts only while the services are idle
         if j.coexist != "no" and j.gpu_gib <= free and cpu_ok(j.run_cpu_gib):
@@ -219,10 +237,12 @@ def decide(snap, gaps, policy):
             free -= j.gpu_gib
             if cpu[0] is not None:
                 cpu[0] -= j.run_cpu_gib
+            if slots[0] is not None:
+                slots[0] -= 1
             acts.append(Action("resume_job", j.name, f"fits beside {_svc_names(snap)} ({j.gpu_gib:.0f} GiB)"))
     started = {a.target for a in acts}
     waiting = [j for j in waiting if j.name not in started]
-    worth_now = [j for j in waiting if gap_worth_it(snap, j, gaps, policy)[0]]
+    worth_now = [j for j in waiting if gap_worth_it(snap, j, gaps, policy)[0]] if has_slot() else []
 
     for s in snap.services:
         if s.state == HOT and s.inflight == 0 and snap.now - s.last_done >= s.idle_park_s and not snap.exclusive:
@@ -235,6 +255,8 @@ def decide(snap, gaps, policy):
     # parks are serial: the next request waits for every job that has to step aside, plus the service wake
     reclaim = side_reclaim
     for j in sorted(waiting, key=rank):
+        if not has_slot():
+            break
         ok, why = gap_worth_it(snap, j, gaps, policy)
         if not ok:
             continue
@@ -246,6 +268,8 @@ def decide(snap, gaps, policy):
             cpu[0] -= j.run_cpu_gib
         free -= j.gpu_gib
         reclaim += j.park_s
+        if slots[0] is not None:
+            slots[0] -= 1
         acts.append(Action("resume_job", j.name, why))
     return acts
 
@@ -315,6 +339,9 @@ def explain(snap, gaps, policy):
         worth, gwhy = gap_worth_it(snap, j, gaps, policy)
         if snap.hold:
             out[j.name] = ("waiting", snap.hold)
+        elif policy.max_active_jobs and len(active_jobs(snap)) >= policy.max_active_jobs:
+            out[j.name] = ("waiting", f"max active jobs reached ({len(active_jobs(snap))} of {policy.max_active_jobs} "
+                                      f"running): starts when one finishes or steps aside, in queue order")
         elif snap.cpu_free_gib is not None and snap.cpu_free_gib - j.run_cpu_gib < policy.cpu_floor_gib:
             out[j.name] = ("waiting", f"host memory: needs {j.run_cpu_gib:.0f} GiB, {snap.cpu_free_gib:.0f} GiB available "
                                       f"(floor {policy.cpu_floor_gib:.0f})")

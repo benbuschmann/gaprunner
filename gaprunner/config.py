@@ -74,6 +74,8 @@ def parse(raw):
     if unknown:
         raise ConfigError(f"unknown policy keys: {', '.join(sorted(unknown))}")
     policy = Policy(**pol)
+    if not isinstance(policy.max_active_jobs, int) or policy.max_active_jobs < 0:
+        raise ConfigError("policy.max_active_jobs must be a whole number, 0 for no limit")
     services, jobs, names = raw.get("service", []), raw.get("job", []), set()
     claims = raw.get("claim", [])
     for c in claims:

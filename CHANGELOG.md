@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.0
+
+- Max active jobs: `policy.max_active_jobs` caps how many jobs are on the GPU at once (0, the default, means no limit),
+  like qBittorrent's "Max active torrents". The rest wait their turn in queue order and say so ("max active jobs
+  reached (1 of 1 running)"). A service isn't put to sleep for a job that has no slot. Lowering the limit steps aside
+  the jobs last in the queue.
+
 ## 0.19.0
 
 - Jobs that lose work when they step aside. A `restart` job loses what it did since its last saved point, so a job with
