@@ -103,6 +103,25 @@ A service that should be up but hasn't answered for 30 s is flagged too. A flag 
 
 A job that parks by sleeping (`cuda-checkpoint`, `vllm`, `command`) moves its GPU state into host RAM. With `fallback = "restart"` (and a `start_cmd`), GapRunner first checks there's room: if host memory minus the extra the frozen copy needs (`parked.cpu_gib - running.cpu_gib`) would fall below `policy.cpu_floor_gib`, it stops the job instead (SIGTERM to its process group) and runs `start_cmd` again later, so the job resumes from its own checkpoint. Big jobs that can never sleep (their host RAM is already spoken for) simply use `driver = "restart"`.
 
+## Jobs that lose work when they step aside
+
+A `restart` job stepping aside is stopped and started again later from its own checkpoint, so it loses whatever it
+did since its last saved point. If saves are far apart (a training step of 30 minutes), short quiet spells cost more
+than they give: the job is stopped before it saves, again and again.
+
+GapRunner accounts for that when a recipe has `saved_cmd`:
+- It learns the running time between saved points (the first line `saved_cmd` prints changing), checked once a minute
+  while the job runs. `save_every_s` is the first guess until then.
+- Such a job starts in a quiet spell only when the spell is at least `policy.lossy_p_min` likely (default 50%) to last
+  for its come-back time plus that interval. Otherwise it waits, and the page says why ("needs about 40 min of quiet to
+  reach its next saved point"). A slow-wake or no-prod period lets it run regardless.
+- A job that fits beside the awake service never steps aside for it, so it starts as usual.
+- Each step-aside records a `lost_work` event with the running time thrown away.
+
+`loses_work` is `true` for `restart` jobs and `false` for drivers that keep their place (sleep, freeze). Set it for a
+`command` job whose hooks stop the job. The better fix, where the job allows it, is a driver that keeps its place, so
+it can use every quiet spell.
+
 ## Engines: one service, several models
 
 ```toml

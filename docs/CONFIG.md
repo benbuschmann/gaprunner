@@ -37,6 +37,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `starvation_s` | `3600.0` | a job waiting this long goes to the front of the queue |
 | `reserve_gib` | `4.0` | GPU memory always kept free |
 | `cpu_floor_gib` | `16.0` | CPU memory always kept free (no start or sleep below it) |
+| `lossy_p_min` | `0.5` | a job that loses work starts in a quiet spell only when it's at least this likely to last until its next saved point |
 | `cold_start_after_s` | `120.0` | until 20 quiet spells are learned, jobs wait for this much quiet |
 | `park_only_if_work` | `true` | put a service to sleep only when a job can use the time |
 
@@ -98,7 +99,9 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `max_hours` | none | step aside and wind down after this many hours of running |
 | `[running]`, `[parked]` | | memory per tier (`hbm_gib`, `cpu_gib`, `ssd_gib`); `ssd_paths` lets Measure fill in disk use |
 | `progress_cmd` | none | prints progress (`12/50`, `24%`, `0.24`); an optional second line is the part in progress |
-| `saved_cmd` | none | prints the last saved point; Wind down stops the job when it changes |
+| `saved_cmd` | none | prints the last saved point; Wind down stops the job when it changes, and GapRunner learns how long a job that loses work runs between saved points |
+| `loses_work` | `true` for `restart`, else `false` | stepping aside throws away the work since the last saved point (see [Jobs that lose work](RECIPES.md#jobs-that-lose-work-when-they-step-aside)) |
+| `save_every_s` | none | first guess of the running time between saved points, until `saved_cmd` has measured it |
 | `summary_cmd` | none | prints a few lines shown first in the job's details (e.g. best results so far) |
 | `health_cmd`, `health_grace_s` | none, `900` | non-zero exit = unhealthy (after the grace period at start) |
 | `stall_after_s` | `1800` | flag it as stuck when neither its progress nor its log has moved for this long |

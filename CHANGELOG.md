@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Jobs that lose work when they step aside. A `restart` job loses what it did since its last saved point, so a job with
+  long steps (30-minute training steps) could be stopped before every save in a run of short quiet spells. GapRunner now
+  learns each such job's time between saved points from `saved_cmd` and starts it only in quiet spells at least
+  `policy.lossy_p_min` (50%) likely to last until its next save. Jobs that fit beside the awake service, jobs that sleep
+  or freeze, and slow-wake / no-prod periods are unaffected. New recipe fields `loses_work` (default: true for
+  `restart`) and `save_every_s` (first guess); each step-aside records a `lost_work` event; the job's details show its
+  save interval and unsaved time.
+
 ## 0.18.3
 
 - Page: a job never gets a service's colour. Services take the first colours and jobs cycle through the rest (before,

@@ -133,6 +133,13 @@ def parse(raw):
             raise ConfigError(f"job {j['name']}: fallback = \"restart\" needs a start_cmd to run it again")
         j.setdefault("park_s", 5.0)
         j.setdefault("resume_s", 5.0)
+        # a job that loses its unsaved work when it steps aside (stopped and started again) needs a quiet spell long
+        # enough to reach its next saved point; restart jobs do by default
+        j.setdefault("loses_work", j["driver"] == "restart")
+        if not isinstance(j["loses_work"], bool):
+            raise ConfigError(f"job {j['name']}: loses_work must be true or false")
+        if j.get("save_every_s") is not None and float(j["save_every_s"]) <= 0:
+            raise ConfigError(f"job {j['name']}: save_every_s must be a positive number of seconds")
         j.setdefault("order", i)
         j.setdefault("hold", False)
         j.setdefault("window_only", False)

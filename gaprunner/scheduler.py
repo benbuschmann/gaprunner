@@ -60,6 +60,7 @@ class Job:
     issues: list = None            # health problems found while it runs (report-only)
     blocked_by: str = None         # a dependency that hasn't finished (or failed), in words
     run_cpu_gib: float = 0.0       # extra CPU memory it takes when it starts or resumes
+    save_s: float = 0.0            # loses unsaved work when it steps aside: running time to its next saved point
 
 
 @dataclass
@@ -76,6 +77,8 @@ class Policy:
     cold_start_after_s: float = 120.0
     park_only_if_work: bool = True
     cpu_floor_gib: float = 16.0     # never start or park something if host memory would drop below this
+    lossy_p_min: float = 0.5        # a job that loses unsaved work starts in a quiet spell only when it's at least
+                                    # this likely to last until the job's next saved point
 
 
 @dataclass
@@ -143,6 +146,14 @@ def gap_worth_it(snap, job, gaps, policy):
         ok = elapsed >= policy.cold_start_after_s
         return ok, (f"still learning how long {_svc_names(snap)} stays quiet; meanwhile it waits for "
                     f"{_dur(policy.cold_start_after_s)} of quiet ({_dur(elapsed)} so far)")
+    if job.save_s:
+        need_save = job.resume_s + job.save_s
+        p_save = min(m.p_continue(elapsed, need_save) for m in gaps.values())
+        bar = max(policy.p_min, policy.lossy_p_min)
+        if p_save < bar:
+            return False, (f"it loses unsaved work when it steps aside, so it needs about {_dur(need_save)} of quiet to "
+                           f"reach its next saved point; after {_dur(elapsed)} of quiet that happens {p_save:.0%} of "
+                           f"the time (needs {bar:.0%})")
     p = min(ps)
     return p >= policy.p_min, (f"it needs about {_dur(need)} of quiet to be worth stepping in; after {_dur(elapsed)} of "
                                f"quiet that happens {p:.0%} of the time (needs {policy.p_min:.0%})")
@@ -201,6 +212,8 @@ def decide(snap, gaps, policy):
                 room_awake -= j.gpu_gib
             elif not snap.window_open and side_reclaim + j.park_s > policy.max_added_wait_s:
                 continue
+            elif j.save_s and not gap_worth_it(snap, j, gaps, policy)[0]:
+                continue                              # it would step aside at the next wake and lose its work
             else:
                 side_reclaim += j.park_s
             free -= j.gpu_gib

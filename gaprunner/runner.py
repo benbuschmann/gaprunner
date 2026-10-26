@@ -64,6 +64,7 @@ class Runner:
         for j in cfg["jobs"]:
             self.costs.seed(j["name"], "park", j["park_s"])
             self.costs.seed(j["name"], "resume", j["resume_s"])
+            self.costs.seed(j["name"], "save", j.get("save_every_s"))   # learned from saved_cmd as it runs
             if j.get("start_cmd"):
                 j["wrapper_pid_file"] = os.path.join(self.top["state_dir"], f"job-{_slug(j['name'])}.pid")
                 if not (j.get("pid_file") or j.get("pids") or j.get("pgrep") or j.get("pids_cmd")):
@@ -73,7 +74,7 @@ class Runner:
                                    "fallback": D.Restart(j) if j.get("fallback") else None,
                                    "parked_at": None, "proc": None, "paused": False,
                                    "run_s": 0.0, "progress": None, "progress_text": "", "prog": collections.deque(maxlen=60),
-                                   "progress_at": 0.0,
+                                   "progress_at": 0.0, "save_point": None, "save_run_s": None, "save_checked": 0.0,
                                    "result": _read_json(self._result_path(j["name"])),
                                    "frozen": os.path.exists(self._frozen_path(j["name"]))}
         self.count_lock = threading.Lock()
@@ -505,6 +506,7 @@ class Runner:
                     j["active_since"], j["hot_run_s"] = now, j["run_s"]     # (re)started or un-paused
             j["was_running"] = running
             j["last_tick"] = now
+            self._track_saves(n, j, running, now)
             cap = j["spec"].get("max_hours")
             if cap and running and j["run_s"] - j.get("cap_base", 0.0) >= float(cap) * 3600:
                 q = C.read_queue(self.top)
@@ -537,6 +539,30 @@ class Runner:
                         j["progress_changed_run_s"] = j["run_s"]
                     j["progress"], j["progress_text"] = frac, text
                     j["prog"].append((j["run_s"], frac))
+
+    def _track_saves(self, n, j, running, now):
+        """Learn how much running time a job that loses work needs between saved points (saved_cmd, checked once a
+        minute while it runs). The scheduler uses it to give such a job only quiet spells long enough to save."""
+        if not (j["spec"]["loses_work"] and j["spec"].get("saved_cmd") and running) or now - j["save_checked"] < 60:
+            return
+        from . import progress
+        j["save_checked"] = now
+        v = progress.saved_point(j["spec"])
+        if v is None or v == j["save_point"]:
+            return
+        first, j["save_point"] = j["save_point"] is None, v
+        if first:
+            return                     # where it is, not when it got there (unless it was started from a saved point)
+        if j["save_run_s"] is not None:
+            self.costs.record(n, "save", j["run_s"] - j["save_run_s"])
+        j["save_run_s"] = j["run_s"]
+
+    def unsaved_s(self, n):
+        """Running time since a work-losing job's last saved point (what stepping aside now would lose), or None."""
+        j = self.job[n]
+        if not j["spec"]["loses_work"] or j["save_run_s"] is None or j["state"] != HOT:
+            return None
+        return max(0.0, j["run_s"] - j["save_run_s"])
 
     def _wind_down_at_saved_point(self, n, j, held, now):
         """A wound-down job with saved_cmd stops as soon as its saved point moves on (it then resumes from there).
@@ -644,10 +670,16 @@ class Runner:
                     self.audit("park", target=name, seconds=round(self.clock() - t0, 3), how="stopped",
                                reason=f"{reason}; not enough host RAM to sleep ({free:.0f} GiB free, needs {extra:.0f})")
             else:
+                lost = self.unsaved_s(name)
                 ok = self._transition(j, name, "park", reason)
+                if ok and lost:
+                    self.audit("lost_work", target=name, seconds=round(lost, 1),
+                               note="running time since its last saved point; it resumes from that point")
         finally:
             for d, t in zip(drivers_, saved):
                 d.timeout = t
+        if j["spec"]["loses_work"]:
+            j["save_run_s"] = j["run_s"]          # the next start begins at the last saved point
         self._check_exits()
         if not ok and self.top["kill_stuck_jobs"]:
             pids = j["driver"].pids()
@@ -800,7 +832,8 @@ class Runner:
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
                             sp["order"], sp["hold"], sp["window_only"], sp["enabled"], e["waiting_since"], e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
-                            max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0))))
+                            max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
+                            float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
                         self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
 
@@ -1053,6 +1086,8 @@ class Runner:
                                    "target_service": e["spec"].get("target_service"),
                                    "requires_engine": e["spec"].get("requires_engine"),
                                    "stops_at_saved_point": bool(e["spec"].get("saved_cmd")), "saved_base": e.get("saved_base"),
+                                   "loses_work": e["spec"]["loses_work"], "save_every_s": self.costs.get(j.name, "save")[0],
+                                   "save_every_measured": self.costs.get(j.name, "save")[1], "unsaved_s": self.unsaved_s(j.name),
                                    "progress_text": e["progress_text"], "run_hours": round(e["run_s"] / 3600, 2),
                                    "gpu_hours_left": _hours_left(e),
                                    "calibrating": self.calibrating.get(j.name, {}).get("phase"),

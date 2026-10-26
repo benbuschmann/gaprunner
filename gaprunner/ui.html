@@ -1148,6 +1148,7 @@ function drawer(n, j, q) {
         ${engineRows(j)}
         <dt>Step aside</dt><dd>${cost('park')}</dd>
         <dt>Come back</dt><dd>${cost('resume')}</dd>
+        ${j.loses_work ? `<dt>Saved points</dt><dd>${j.save_every_s != null ? `every ${dur(j.save_every_s)} <span class="faint">${j.save_every_measured ? 'measured' : 'recipe guess'}</span>` : '<span class="faint">learning from saved_cmd</span>'}${j.unsaved_s != null ? `; ${dur(j.unsaved_s)} unsaved now` : ''}<br><span class="faint">Stepping aside loses work since the last one, so it starts only in quiet spells likely to last until its next one.</span></dd>` : ''}
         ${j.gave_way ? `<dt>Gave way</dt><dd>${j.gave_way}× since GapRunner started</dd>` : ''}
         ${j.run_hours ? `<dt>Has run</dt><dd>${j.run_hours} h</dd>` : ''}
       </dl>
@@ -1707,7 +1708,7 @@ const EV = {
   service_release: ['prod gave back cached CPU memory', 'prod'], calibrate_start: ['measuring started', 'jobs'], calibrate_end: ['measuring finished', 'jobs'],
   overlap_risk: ['woke while memory was still in use', 'bad'], resume_skipped: ["didn't come back: no room", 'jobs'], tick_error: ['GapRunner error', 'bad'],
   gpu_hold: ['GPU hold', 'bad'], gpu_hold_cleared: ['GPU hold cleared', 'jobs'], max_hours: ['reached its time limit', 'jobs'],
-  would: ['would act (shadow mode)', 'sys'], result_cleared: ['started again: last exit forgotten', 'you'], park_failed: ['failed to step aside', 'bad'], resume_failed: ['failed to come back', 'bad'], start_failed: ['failed to start', 'bad'],
+  would: ['would act (shadow mode)', 'sys'], result_cleared: ['started again: last exit forgotten', 'you'], park_failed: ['failed to step aside', 'bad'], lost_work: ['lost unsaved work stepping aside', 'jobs'], resume_failed: ['failed to come back', 'bad'], start_failed: ['failed to start', 'bad'],
 };
 // "start" is both GapRunner starting (no target) and a job starting (target): tell them apart
 const evWord = e => e.event === 'start' && e.target ? 'job started' : (EV[e.event] || [String(e.event).replace(/_/g, ' ')])[0];
