@@ -1,2 +1,2 @@
 """GapRunner: resumable background GPU jobs that yield to your local AI services."""
-__version__ = "0.20.0"
+__version__ = "0.20.1"

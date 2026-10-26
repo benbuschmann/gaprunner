@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.1
+
+- Max active jobs: when a job steps aside it waits `juggle_s` (15 s) before it may come back, and in that window a
+  job lower in the queue could take the free slot and keep it until the next step-aside, so the two took turns instead
+  of following queue order. The slot is now kept for the job that stepped aside; the other job says so while it waits.
+
 ## 0.20.0
 
 - Max active jobs: `policy.max_active_jobs` caps how many jobs are on the GPU at once (0, the default, means no limit),

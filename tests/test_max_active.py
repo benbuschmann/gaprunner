@@ -30,6 +30,23 @@ class MaxActiveJobsTest(unittest.TestCase):
         self.assertNotIn(("park_service", "prod"), kinds(decide(s, LONG, ONE)))
         self.assertIn(("park_service", "prod"), kinds(decide(s, LONG, POL)))
 
+    def test_the_slot_is_kept_for_a_job_that_just_stepped_aside(self):
+        # "a" (first in the queue) stepped aside 5 s ago and must wait juggle_s (15 s) before coming back: "b" must not
+        # take the free slot meanwhile
+        s = snap(svc_state=PARKED, jobs=[job("a", order=0, parked_at=995), job("b", order=1)])
+        self.assertEqual(decide(s, LONG, ONE), [])
+        word, why = explain(s, LONG, ONE)["b"]
+        self.assertEqual(word, "waiting")
+        self.assertIn("kept for a", why)
+        s.now = 1011                                               # a's 15 s are up: it takes its slot back
+        self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "a")])
+        # a job lower in the queue stepping aside keeps nothing from one higher up
+        s = snap(svc_state=PARKED, jobs=[job("a", order=0), job("b", order=1, parked_at=995)])
+        self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "a")])
+        # without a limit nothing is kept
+        s = snap(svc_state=PARKED, jobs=[job("a", order=0, parked_at=995), job("b", order=1)])
+        self.assertEqual(kinds(decide(s, LONG, POL)), [("resume_job", "b")])
+
     def test_config_wants_a_whole_number(self):
         base = {"service": [{"name": "prod", "driver": "vllm", "upstream": "http://x", "listen": "127.0.0.1:0", "gpu_gib": 1}]}
         self.assertEqual(C.parse({**base, "policy": {"max_active_jobs": 2}})["policy"].max_active_jobs, 2)

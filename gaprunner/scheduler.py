@@ -201,7 +201,6 @@ def decide(snap, gaps, policy):
         for j in on[max(0, limit - pinned):]:
             acts.append(Action("park_job", j.name, f"over max active jobs ({limit})"))
     slots = [limit - len(active_jobs(snap)) if limit else None]     # None: no limit
-    has_slot = lambda: slots[0] is None or slots[0] > 0
     waiting = [j for j in snap.jobs if j.state == PARKED and not j.pinned and eligible(snap, j, policy)[0]
                and not (j.parked_at is not None and snap.now - j.parked_at < policy.juggle_s)]
     busy = any(s.inflight for s in snap.services)
@@ -209,6 +208,16 @@ def decide(snap, gaps, policy):
     def rank(j):
         starving = j.waiting_since is not None and snap.now - j.waiting_since >= policy.starvation_s
         return (0 if starving else 1, j.order)
+
+    # a job that just stepped aside waits juggle_s before it may come back; its slot is kept for it meanwhile, so a job
+    # lower in the queue doesn't take the slot and hold it until the next step-aside
+    returning = [j for j in snap.jobs if j.state == PARKED and not j.pinned and eligible(snap, j, policy)[0]
+                 and j.parked_at is not None and snap.now - j.parked_at < policy.juggle_s]
+
+    def has_slot(j=None):
+        if slots[0] is None:
+            return True
+        return slots[0] - sum(1 for r in returning if j is None or rank(r) < rank(j)) > 0
 
     # beside: jobs that may coexist start whenever they fit next to whatever is on the GPU now
     free = snap.gpu_total_gib - max(committed_gib(snap), snap.gpu_used_gib or 0.0) - policy.reserve_gib
@@ -221,7 +230,7 @@ def decide(snap, gaps, policy):
     side_reclaim = max((sv.wake_s for sv in snap.services), default=0.0) + \
         sum(j.park_s for j in snap.jobs if j.coexist == "no" and j.state in (HOT, RESUMING))
     for j in sorted(waiting, key=rank):
-        if not has_slot():
+        if not has_slot(j):
             break
         if j.coexist == "yield" and busy:
             continue                                  # a yield job starts only while the services are idle
@@ -255,7 +264,7 @@ def decide(snap, gaps, policy):
     # parks are serial: the next request waits for every job that has to step aside, plus the service wake
     reclaim = side_reclaim
     for j in sorted(waiting, key=rank):
-        if not has_slot():
+        if not has_slot(j):
             break
         ok, why = gap_worth_it(snap, j, gaps, policy)
         if not ok:
@@ -339,6 +348,12 @@ def explain(snap, gaps, policy):
         worth, gwhy = gap_worth_it(snap, j, gaps, policy)
         if snap.hold:
             out[j.name] = ("waiting", snap.hold)
+        elif policy.max_active_jobs and len(active_jobs(snap)) < policy.max_active_jobs and (keep := [
+                r for r in snap.jobs if r.state == PARKED and r.order < j.order and r.parked_at is not None
+                and snap.now - r.parked_at < policy.juggle_s and eligible(snap, r, policy)[0]]) and \
+                len(active_jobs(snap)) + len(keep) >= policy.max_active_jobs:
+            out[j.name] = ("waiting", f"max active jobs: the free slot is kept for {keep[0].name}, which just stepped "
+                                      f"aside and comes back in {policy.juggle_s - (snap.now - keep[0].parked_at):.0f} s")
         elif policy.max_active_jobs and len(active_jobs(snap)) >= policy.max_active_jobs:
             out[j.name] = ("waiting", f"max active jobs reached ({len(active_jobs(snap))} of {policy.max_active_jobs} "
                                       f"running): starts when one finishes or steps aside, in queue order")
