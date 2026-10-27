@@ -1015,7 +1015,7 @@ function buttons(n, j) {
     out.push(b('queue', 'Queue', '', 'Start it by itself once another job finishes'));
   }
   else out.push(b('winddown', 'Wind down', '', "Finish the current run, then don't start again"));
-  if (j.state === 'hot' || j.frozen) out.push(b('stop', 'Stop', 'danger', 'End it now; it resumes from its last checkpoint when you Start it'));
+  if (j.state === 'hot' || j.frozen || holdsMemory(j)) out.push(b('stop', 'Stop', 'danger', 'End it now; it resumes from its last checkpoint when you Start it'));
   return out.join('');
 }
 let SORT = (() => { try { return JSON.parse(localStorage.getItem('gaprunner.sort')) || {k: 'queue', d: 1}; } catch (e) { return {k: 'queue', d: 1}; } })();
@@ -1227,7 +1227,7 @@ function renderBulk() {
     btn('winddown', 'Wind down', '', any(['running', 'queued'])) +
     btn('pause', 'Pause', '', sel.some(n => S.jobs[n] && S.jobs[n].state === 'hot' && !S.jobs[n].frozen)) +
     btn('resume', 'Resume', '', sel.some(n => S.jobs[n] && S.jobs[n].frozen)) +
-    btn('stop', 'Stop', 'danger', any(['running'])) +
+    btn('stop', 'Stop', 'danger', any(['running']) || sel.some(n => S.jobs[n] && holdsMemory(S.jobs[n]))) +
     (jobsOnly ? `<select data-bulkruns aria-label="Where they run"><option value="">Runs…</option>${RUNS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>` : '') +
     btn('top', 'Move to top') + btn('bottom', 'Move to bottom') +
     btn('clear', 'Clear', '', any(['done', 'failed', 'wound', 'idea', 'queued']), 'Hide it under Cleared; it never starts by itself') +
@@ -1495,6 +1495,9 @@ function renderPane() {
   }
   if (PTAB !== 'log') { body.dataset.for = n + PTAB; body.scrollTop = keep; }
 }
+// a job that stepped aside by freezing or sleeping keeps its processes and their memory; Stop frees it
+const holdsMemory = j => j.state === 'parked' && j.cpu_gib_now != null && j.cpu_gib_now >= 1;
+
 function peakHtml(j, run) {
   // the GPU peak GapRunner measured per run, beside the recipe's figure; a recipe that understates it is called out
   const peak = j.gpu_peak_gib != null ? j.gpu_peak_gib : j.gpu_peak_now;

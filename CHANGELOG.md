@@ -2,6 +2,8 @@
 
 ## 0.24.1
 
+- The page shows Stop for a job that stepped aside by freezing or sleeping and still holds memory. Before, Stop
+  appeared only for running or hand-paused jobs, so such a job could not be stopped from the page to free its memory.
 - A park that stopped a job (or otherwise kept nothing in host memory) is no longer recorded as a host-memory sample.
   Those zeros pulled the measured figure down for jobs that sometimes freeze and sometimes stop.
 
