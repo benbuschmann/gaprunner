@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.0
+
+- Jobs API: other programs put jobs into the queue. The operator writes `[[template]]` entries (job recipes with
+  `{{param}}` slots and typed, limited parameters) and gives each program a token (`[[client]]`, holding only the
+  token's SHA-256) that names the templates it may use, a GPU memory cap, how many unfinished jobs it may have and
+  where its jobs enter the queue. `POST /api/jobs` fills a template in (values shell-quoted in commands, and exported
+  as `GAPRUNNER_PARAM_<NAME>`) and queues the job; `GET /api/jobs`, `GET /api/jobs/<id>` and `DELETE /api/jobs/<id>`
+  follow it and withdraw it; `GET /api/templates` lists what a token may use. Submitted jobs survive a restart.
+  `gaprunner token` makes a token and its hash. See docs/JOBS-API.md.
+
 ## 0.25.0
 
 - Jobs an app asks for (`driver = "governor"`). An app that starts its own GPU server when someone asks for work

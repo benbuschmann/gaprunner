@@ -116,6 +116,21 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `comfy_url`, `idle_release_s` | none, `600` | governor jobs: the app's ComfyUI, to record each prompt it runs; revoke after this long with nothing to run (0 = never) |
 | driver fields | | `url`, `headers` (vllm, sglang, park-protocol); `park_cmd`, `resume_cmd`, `state_cmd` (command); `pid_file`, `pids`, `pids_cmd`, `pgrep`, `sudo`, `cuda_checkpoint` (cuda-checkpoint and adopted jobs) |
 
+## `[[template]]` and `[[client]]`
+
+Recipes other programs may fill in, and the tokens that may use them, for the Jobs API. See [JOBS-API.md](JOBS-API.md).
+
+| key | default | meaning |
+|---|---|---|
+| template `name`, `description` | | how callers refer to it |
+| template job fields | | the recipe: `driver` (`restart`, `cuda-checkpoint`, `command`), `start_cmd`, `workdir`, `env`, memory, placement, progress and the other run fields; `{{param}}` slots in commands (shell-quoted), `goal`, `notes` and `env` |
+| template `max_gpu_gib` | its `gpu_gib` | the most GPU memory a caller may ask for |
+| `[template.params.<name>]` | | `type` (`string`, `int`, `float`, `bool`, `choice`), `default`, `required`, `min`, `max`, `max_len`, `pattern`, `choices` |
+| client `name`, `token_sha256` | | the caller, and the SHA-256 of its token (`gaprunner token`) |
+| client `templates` | | the templates it may use, or `["*"]` |
+| client `max_gpu_gib`, `max_jobs` | none, `5` | a GPU memory cap per job; unfinished jobs at once |
+| client `queue_at`, `hold` | `"bottom"`, `false` | where its jobs enter the queue (`top` or `bottom`); start them wound down |
+
 ## `[[claim]]`
 
 Work started by hand that GapRunner should know about.

@@ -28,6 +28,10 @@ To answer "why isn't my job running?", read `jobs[<name>].why` in `/api/status`.
 
 ## Getting work onto the GPU
 
+**If the operator gave you a Jobs API token,** use it: `GET /api/templates` lists what you may run and with which
+parameters, and `POST /api/jobs` queues one (see [JOBS-API.md](JOBS-API.md)). You fill in values; the commands are
+the operator's. Otherwise, write a recipe for the operator:
+
 1. **Make it resumable.** It should restart from its own checkpoint (`--resume`), or be a plain CUDA process that `cuda-checkpoint` can freeze.
 2. **Measure it once.** Note its peak GPU memory, CPU memory and disk use, plus how long it takes to stop and to resume.
 3. **Write a recipe** following [RECIPES.md](RECIPES.md) and add it to the config. Start with `hold = true`.

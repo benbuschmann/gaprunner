@@ -139,6 +139,14 @@ def cmd_pause(a, on=True):
         print("unpaused")
 
 
+def cmd_token(a):
+    """A new Jobs API token and the line for its [[client]] entry. The token is shown once; the config keeps only
+    its SHA-256."""
+    from .jobsapi import token_pair
+    token, digest = token_pair()
+    print(f"token (give this to the client, once):\n  {token}\n\nfor its [[client]] entry:\n  token_sha256 = \"{digest}\"")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="gaprunner", description=__doc__)
     ap.add_argument("--version", action="version", version=__version__)
@@ -151,6 +159,7 @@ def main(argv=None):
             p.add_argument("--strict", action="store_true", help="also fail unless the GPU is readable and every service answers")
         p.set_defaults(fn=f)
     sub.add_parser("example", help="print a minimal config to start from").set_defaults(fn=cmd_example)
+    sub.add_parser("token", help="make a Jobs API token and the hash for its [[client]] entry").set_defaults(fn=cmd_token)
     p = sub.add_parser("switch")
     p.add_argument("config")
     p.add_argument("service")

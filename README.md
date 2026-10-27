@@ -33,6 +33,7 @@ GPU. It is early (0.x) and has been running in production on one NVIDIA DGX Stat
 | **Memory** | Each recipe states its GPU, CPU and disk use, measured for you by `gaprunner calibrate`. A job starts only when the driver shows room for it, keeping a GPU reserve and a host-memory floor. |
 | **Saved work** | A job that loses unsaved work when stopped gets only quiet spells long enough to reach its next saved point, and every lost stretch is recorded. |
 | **Work you run by hand** | Claims: a process you started yourself is counted in memory, or holds the queue while it runs. |
+| **Jobs API** | Other programs put jobs into the queue from templates you write: a caller fills in typed, checked parameters, never a command. Each program has its own token, limited to some templates, a GPU memory cap and a number of open jobs ([JOBS-API.md](docs/JOBS-API.md)). |
 | **Apps that ask first** | An app that starts its own GPU server when someone asks for work can ask GapRunner for a reservation and wait in the queue in its place (`driver = "governor"`). Imagination Studio's renderer speaks this protocol. Each piece of work it runs is recorded with its size, time and memory. |
 | **Recipes** | A job is a TOML entry: how to start it, its goal, progress, saved-point, summary and health commands, its memory per tier, a colour. |
 | **For agents** | An [agent guide](docs/AGENT-GUIDE.md), a drop-in [skill](skills/gaprunner/SKILL.md) and [llms.txt](llms.txt), so coding agents can read state, queue jobs and explain why a job is waiting. |

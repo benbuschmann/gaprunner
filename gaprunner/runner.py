@@ -62,21 +62,9 @@ class Runner:
                                    "switching": None, "schedule_slot": None, "dead_since": None, "wake_failures": 0}
         self.job = {}
         for j in cfg["jobs"]:
-            self.costs.seed(j["name"], "park", j["park_s"])
-            self.costs.seed(j["name"], "resume", j["resume_s"])
-            self.costs.seed(j["name"], "save", j.get("save_every_s"))   # learned from saved_cmd as it runs
-            if j.get("start_cmd"):
-                j["wrapper_pid_file"] = os.path.join(self.top["state_dir"], f"job-{_slug(j['name'])}.pid")
-                if not (j.get("pid_file") or j.get("pids") or j.get("pgrep") or j.get("pids_cmd")):
-                    j["pid_file"] = j["wrapper_pid_file"]
-                    j["group"] = True          # GapRunner starts it in its own process group and signals the group
-            self.job[j["name"]] = {"spec": j, "driver": D.make(j), "state": UNKNOWN, "waiting_since": clock(),
-                                   "fallback": D.Restart(j) if j.get("fallback") else None,
-                                   "parked_at": None, "proc": None, "paused": False,
-                                   "run_s": 0.0, "progress": None, "progress_text": "", "prog": collections.deque(maxlen=60),
-                                   "progress_at": 0.0, "save_point": None, "save_run_s": None, "save_checked": 0.0,
-                                   "result": _read_json(self._result_path(j["name"])),
-                                   "frozen": os.path.exists(self._frozen_path(j["name"]))}
+            self.job[j["name"]] = self._job_entry(j)
+        from .jobsapi import Submissions
+        self.submissions = Submissions(self)
         from .governor import Governor, GovernorJob
         govs = [e["driver"] for e in self.job.values() if isinstance(e["driver"], GovernorJob)]
         self.governor = Governor(self, govs) if govs else None
@@ -97,10 +85,74 @@ class Runner:
         self.live_rows = collections.deque(maxlen=720)                                 # 5 s rows, last hour
         self.activity = collections.deque(_tail_jsonl(self.activity_path, self.clock() - 86400))
         self.last_minute = 0
+        self.submissions.load()               # jobs submitted through the Jobs API, back in the queue
         if not readonly:
             _trim_jsonl(self.history_path, self.clock() - HISTORY_KEEP_S)
             _trim_jsonl(self.activity_path, self.clock() - ACTIVITY_KEEP_S)
             _trim_jsonl(self.audit_path, self.clock() - HISTORY_KEEP_S)
+
+    def _job_entry(self, j):
+        """The runner's record of one job (from the config, or submitted through the Jobs API)."""
+        clock = self.clock
+        self.costs.seed(j["name"], "park", j["park_s"])
+        self.costs.seed(j["name"], "resume", j["resume_s"])
+        self.costs.seed(j["name"], "save", j.get("save_every_s"))   # learned from saved_cmd as it runs
+        if j.get("start_cmd"):
+            j["wrapper_pid_file"] = os.path.join(self.top["state_dir"], f"job-{_slug(j['name'])}.pid")
+            if not (j.get("pid_file") or j.get("pids") or j.get("pgrep") or j.get("pids_cmd")):
+                j["pid_file"] = j["wrapper_pid_file"]
+                j["group"] = True          # GapRunner starts it in its own process group and signals the group
+        return {"spec": j, "driver": D.make(j), "state": UNKNOWN, "waiting_since": clock(),
+                "fallback": D.Restart(j) if j.get("fallback") else None,
+                "parked_at": None, "proc": None, "paused": False,
+                "run_s": 0.0, "progress": None, "progress_text": "", "prog": collections.deque(maxlen=60),
+                "progress_at": 0.0, "save_point": None, "save_run_s": None, "save_checked": 0.0,
+                "result": _read_json(self._result_path(j["name"])),
+                "frozen": os.path.exists(self._frozen_path(j["name"]))}
+
+    def add_job(self, spec, queue_at=None):
+        """Add a job while running (the Jobs API). It is checked like a [[job]] entry; queue_at "top" or "bottom"
+        places it in the queue file."""
+        from .config import job_defaults
+        with self.lock:
+            if spec.get("name") in self.job or spec.get("name") in self.svc:
+                raise ValueError(f"a job named {spec.get('name')!r} already exists")
+            if spec.get("driver") == "governor":
+                raise ValueError("governor jobs come from the config")
+            spec = job_defaults(spec, max((e["spec"]["order"] for e in self.job.values()), default=-1) + 1)
+            entry = self._job_entry(spec)
+            if spec.get("start_cmd") and not entry["driver"].pids() and entry["result"] is None:
+                entry["state"] = PARKED           # waiting for its turn (refresh says the same from the next tick)
+            self.job[spec["name"]] = entry
+            self.cfg["jobs"].append(spec)
+            if queue_at in ("top", "bottom") and not self.readonly:
+                from .ui import ordered_queue
+                q = [x for x in ordered_queue(self) if x["name"] != spec["name"]]
+                row = {"name": spec["name"], "hold": bool(spec["hold"]), "window_only": bool(spec["window_only"]),
+                       "added": round(self.clock(), 1), **({"tags": spec["tags"]} if spec.get("tags") else {})}
+                q.insert(0 if queue_at == "top" else len(q), row)
+                C.write_queue(self.top, {"jobs": q})
+        return spec
+
+    def remove_job(self, name):
+        """Take a job out (the Jobs API's withdraw): stopped first if it holds anything, then forgotten."""
+        if name not in self.job:
+            raise ValueError("no such job")
+        if self.job[name]["driver"].pids():
+            self.stop_job(name)
+        with self.lock:
+            self.job.pop(name, None)
+            self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
+            q = C.read_queue(self.top)
+            q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
+            C.write_queue(self.top, q)
+
+    def status_of(self, name):
+        """{"word", "why"} for one job, as /api/status says it."""
+        snap = self.snapshot()
+        why = explain(snap, {n: e["gaps"] for n, e in self.svc.items()}, self.policy)
+        word, text = why.get(name, (None, None))
+        return {"word": word, "why": text}
 
     # ---------- bookkeeping ----------
     def _engine_path(self, name):

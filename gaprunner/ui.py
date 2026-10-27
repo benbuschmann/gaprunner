@@ -13,6 +13,9 @@ POST /api/action {"pin", "action", ...}
      switch {"service", "engine"} | freeze {"name"} | thaw {"name"} | stop {"name"} | pause | unpause | drain | undrain | clear_gpu_hold | window {"hours": h (0 closes), "exclusive": bool (stop the services)} | move {"name", "dir": "up"|"down"} |
      set {"name", "field": "hold"|"window_only"|"notes", "value"} | add {"name", "notes"} (a planned item) |
      remove {"name"} (planned items only) | calibrate {"name", "warm_s": 60, "cycles": 2} (live mode)
+
+The Jobs API (jobsapi.py, docs/JOBS-API.md) needs "Authorization: Bearer <token>" instead of the PIN:
+GET /api/templates | GET /api/jobs | GET /api/jobs/<id> | POST /api/jobs {"template", "params", ...} | DELETE /api/jobs/<id>
 """
 import hmac
 import http.server
@@ -387,10 +390,53 @@ def make_handler(runner):
                 return self._send(200, job_log(runner, q.get("name", [""])[0], int(n("n", 200))))
             if path == "/api/summary":
                 return self._send(200, summary(runner, n("s", 86400)))
+            if path == "/api/templates" or path == "/api/jobs" or path.startswith("/api/jobs/"):
+                return self._jobs_api("GET", path)
             self._send(404, {"error": "not found"})
 
+        def do_DELETE(self):
+            path = urllib.parse.urlparse(self.path).path.rstrip("/")
+            if path.startswith("/api/jobs/"):
+                return self._jobs_api("DELETE", path)
+            self._send(404, {"error": "not found"})
+
+        def _jobs_api(self, method, path, body=None):
+            from .jobsapi import SubmitError
+            subs = runner.submissions
+            client = subs.client_of(self.headers.get("Authorization", ""))
+            if client is None:
+                return self._send(401, {"ok": False, "error": "a valid \"Authorization: Bearer <token>\" is required"})
+            jid = path[len("/api/jobs/"):] if path.startswith("/api/jobs/") else None
+            try:
+                if path == "/api/templates" and method == "GET":
+                    return self._send(200, {"templates": subs.describe(client)})
+                if path == "/api/jobs" and method == "GET":
+                    return self._send(200, {"jobs": subs.list(client)})
+                if path == "/api/jobs" and method == "POST":
+                    return self._send(201, {"ok": True, "job": subs.submit(client, body)})
+                if jid and method == "GET":
+                    return self._send(200, {"job": subs.get(client, jid)})
+                if jid and method == "DELETE":
+                    return self._send(200, {"ok": True, **subs.withdraw(client, jid)})
+            except SubmitError as e:
+                return self._send(e.code, {"ok": False, "error": str(e)})
+            except ValueError as e:
+                return self._send(400, {"ok": False, "error": str(e)})
+            self._send(405, {"ok": False, "error": "method not allowed"})
+
         def do_POST(self):
-            if urllib.parse.urlparse(self.path).path != "/api/action":
+            path = urllib.parse.urlparse(self.path).path.rstrip("/")
+            if path == "/api/jobs":
+                from .jobsapi import MAX_BODY
+                size = int(self.headers.get("Content-Length") or 0)
+                if size > MAX_BODY:
+                    return self._send(413, {"ok": False, "error": f"at most {MAX_BODY} bytes"})
+                try:
+                    body = json.loads(self.rfile.read(size) or b"{}")
+                except ValueError:
+                    return self._send(400, {"ok": False, "error": "bad json"})
+                return self._jobs_api("POST", path, body)
+            if path != "/api/action":
                 return self._send(404, {"error": "not found"})
             try:
                 body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")

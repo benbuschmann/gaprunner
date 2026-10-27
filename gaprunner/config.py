@@ -129,39 +129,7 @@ def parse(raw):
             except (KeyError, ValueError):
                 raise ConfigError(f"service {s['name']}: schedule entries need at = \"HH:MM\"") from None
     for i, j in enumerate(jobs):
-        _need(j, JOB_REQUIRED, "job")
-        _footprint(j, "job")
-        j.setdefault("coexist", "no")
-        if j["coexist"] not in COEXIST:
-            raise ConfigError(f"job {j['name']}: coexist must be one of {', '.join(COEXIST)}")
-        j.setdefault("yield_resume_s", 5.0)
-        if j.get("fallback") not in (None, "restart"):
-            raise ConfigError(f"job {j['name']}: fallback can only be \"restart\"")
-        if j.get("fallback") and not j.get("start_cmd"):
-            raise ConfigError(f"job {j['name']}: fallback = \"restart\" needs a start_cmd to run it again")
-        if j["driver"] == "governor":
-            _need(j, ("owner",), "job")
-            if j.get("start_cmd"):
-                raise ConfigError(f"job {j['name']}: a governor job is started by its app, not by a start_cmd")
-            j.setdefault("admit_wait_s", 300.0)   # how long a request may wait in the queue before it is refused
-            j.setdefault("grace_s", 30.0)         # after a revoke: SIGTERM, then SIGKILL after this long
-            # a revoke stops the app's work in progress (a render is lost), so it counts as losing work
-            j.setdefault("loses_work", True)
-        j.setdefault("park_s", 5.0)
-        j.setdefault("resume_s", 5.0)
-        # a job that loses its unsaved work when it steps aside (stopped and started again) needs a quiet spell long
-        # enough to reach its next saved point; restart jobs do by default
-        j.setdefault("loses_work", j["driver"] == "restart")
-        if not isinstance(j["loses_work"], bool):
-            raise ConfigError(f"job {j['name']}: loses_work must be true or false")
-        if j.get("save_every_s") is not None and float(j["save_every_s"]) <= 0:
-            raise ConfigError(f"job {j['name']}: save_every_s must be a positive number of seconds")
-        j.setdefault("order", i)
-        j.setdefault("hold", False)
-        j.setdefault("window_only", False)
-        j.setdefault("enabled", True)
-        if j.get("color") is not None and j["color"] not in JOB_COLORS:
-            raise ConfigError(f"job {j['name']}: color must be one of {', '.join(JOB_COLORS)}")
+        job_defaults(j, i)
     owners = [j["owner"] for j in jobs if j["driver"] == "governor"]
     if len(set(owners)) != len(owners):
         raise ConfigError("two governor jobs have the same owner")
@@ -182,7 +150,11 @@ def parse(raw):
         for dep in j["after"]:
             if dep not in {x["name"] for x in jobs}:
                 raise ConfigError(f"job {j['name']}: after = {dep!r} is not a job in this config")
-    return {"gaprunner": top, "policy": policy, "services": services, "jobs": jobs, "claims": claims}
+    from . import jobsapi
+    templates = jobsapi.parse_templates([dict(t) for t in raw.get("template", [])], ConfigError)
+    clients = jobsapi.parse_clients(raw.get("client", []), templates, ConfigError)
+    return {"gaprunner": top, "policy": policy, "services": services, "jobs": jobs, "claims": claims,
+            "templates": templates, "clients": clients}
 
 
 def _engine(e, service, name):
@@ -200,6 +172,44 @@ def _engine(e, service, name):
     e.setdefault("ready_timeout_s", 1800)
     e.setdefault("restart_on_failed_wake", True)
     return e
+
+
+def job_defaults(j, i):
+    """Check one [[job]] entry and fill in its defaults (also used for jobs submitted through the Jobs API)."""
+    _need(j, JOB_REQUIRED, "job")
+    _footprint(j, "job")
+    j.setdefault("coexist", "no")
+    if j["coexist"] not in COEXIST:
+        raise ConfigError(f"job {j['name']}: coexist must be one of {', '.join(COEXIST)}")
+    j.setdefault("yield_resume_s", 5.0)
+    if j.get("fallback") not in (None, "restart"):
+        raise ConfigError(f"job {j['name']}: fallback can only be \"restart\"")
+    if j.get("fallback") and not j.get("start_cmd"):
+        raise ConfigError(f"job {j['name']}: fallback = \"restart\" needs a start_cmd to run it again")
+    if j["driver"] == "governor":
+        _need(j, ("owner",), "job")
+        if j.get("start_cmd"):
+            raise ConfigError(f"job {j['name']}: a governor job is started by its app, not by a start_cmd")
+        j.setdefault("admit_wait_s", 300.0)   # how long a request may wait in the queue before it is refused
+        j.setdefault("grace_s", 30.0)         # after a revoke: SIGTERM, then SIGKILL after this long
+        # a revoke stops the app's work in progress (a render is lost), so it counts as losing work
+        j.setdefault("loses_work", True)
+    j.setdefault("park_s", 5.0)
+    j.setdefault("resume_s", 5.0)
+    # a job that loses its unsaved work when it steps aside (stopped and started again) needs a quiet spell long
+    # enough to reach its next saved point; restart jobs do by default
+    j.setdefault("loses_work", j["driver"] == "restart")
+    if not isinstance(j["loses_work"], bool):
+        raise ConfigError(f"job {j['name']}: loses_work must be true or false")
+    if j.get("save_every_s") is not None and float(j["save_every_s"]) <= 0:
+        raise ConfigError(f"job {j['name']}: save_every_s must be a positive number of seconds")
+    j.setdefault("order", i)
+    j.setdefault("hold", False)
+    j.setdefault("window_only", False)
+    j.setdefault("enabled", True)
+    if j.get("color") is not None and j["color"] not in JOB_COLORS:
+        raise ConfigError(f"job {j['name']}: color must be one of {', '.join(JOB_COLORS)}")
+    return j
 
 
 def _footprint(e, kind):
