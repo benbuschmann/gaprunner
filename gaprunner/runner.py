@@ -647,7 +647,8 @@ class Runner:
             host1 = self.host_mem()
             if host1 is not None:          # host memory the park took (weights or a frozen copy moving to RAM)
                 took = round(max(0.0, host0 - host1), 1)
-                self.costs.record(entry.get("cost_key", name), "park_host", took)
+                if took >= 1.0:            # a park that stopped the process keeps nothing: it says nothing about
+                    self.costs.record(entry.get("cost_key", name), "park_host", took)     # what a copy costs
         self.audit(op, target=name, seconds=round(dt_, 3), reason=reason,
                    **({"host_gib": took} if took is not None else {}))
         if op == "resume" and name in self.svc:

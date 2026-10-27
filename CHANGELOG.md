@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.24.1
+
+- A park that stopped a job (or otherwise kept nothing in host memory) is no longer recorded as a host-memory sample.
+  Those zeros pulled the measured figure down for jobs that sometimes freeze and sometimes stop.
+
 ## 0.24.0
 
 - A service isn't put to sleep while its `warm_cmd` is still running after a start or a wake (at most

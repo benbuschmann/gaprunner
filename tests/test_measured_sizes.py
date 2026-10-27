@@ -57,6 +57,13 @@ class MeasuredHostTest(unittest.TestCase):
             ev = [json.loads(x) for x in f if '"park"' in x][-1]
         self.assertEqual(ev["host_gib"], 170.0)
 
+    def test_a_park_that_keeps_nothing_is_not_a_sample(self):
+        r = self.build()
+        reads = iter([300.0, 305.0])                 # the park freed memory (a stopped process)
+        r.host_mem = lambda: next(reads, 305.0)
+        self.assertTrue(r._transition(r.svc["prod"], "prod", "park", "test"))
+        self.assertEqual(r.costs.get(r.svc["prod"]["cost_key"], "park_host"), (None, False))
+
     def test_the_larger_of_recipe_and_measurement_decides(self):
         r = self.build(parked_cpu=41)
         key = r.svc["prod"]["cost_key"]
