@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaprunner"
-version = "0.24.1"
+version = "0.25.0"
 description = "Resumable background GPU jobs that yield to your local AI services"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -35,4 +35,4 @@ gaprunner = "gaprunner.cli:main"
 packages = ["gaprunner"]
 
 [tool.setuptools.package-data]
-gaprunner = ["ui.html", "example.toml"]
+gaprunner = ["ui.html", "example.toml", "governor_client/*.py"]

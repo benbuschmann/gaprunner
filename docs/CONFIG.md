@@ -24,6 +24,8 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `ui_pin_file` | none (read-only) | a file holding the PIN changes need; missing or empty = read-only |
 | `notify_cmd` | none | run on health alerts, with `GAPRUNNER_LEVEL`, `GAPRUNNER_TARGET`, `GAPRUNNER_MSG` set |
 | `notify_file` | none | and/or append each alert to this file as a JSON line |
+| `governor_dir` | `<state_dir>/governor` | for `driver = "governor"` jobs: the folder apps read (client modules, reservations, admission socket) |
+| `governor_uids` | `[]` | other users whose apps may ask for a reservation (Linux); GapRunner's own user always may |
 
 ## `[policy]`
 
@@ -85,7 +87,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 
 | key | default | meaning |
 |---|---|---|
-| `driver` | | `restart`, `cuda-checkpoint`, `vllm`, `sglang`, `park-protocol`, `command` |
+| `driver` | | `restart`, `cuda-checkpoint`, `vllm`, `sglang`, `park-protocol`, `command`, `governor` |
 | `goal`, `notes`, `kind`, `tags` | | what it's for and when it's done; free text; a label; tags for the page |
 | `color` | by queue position | the job's colour on the page: blue, orange, teal, purple, olive, pink, indigo or amber (jobs otherwise skip the services' colours) |
 | `start_cmd`, `workdir`, `env` | none, `.`, `{}` | how GapRunner starts it (in its own process group, output to `<state_dir>/job-<name>.log`) |
@@ -110,6 +112,8 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `health_cmd`, `health_grace_s` | none, `900` | non-zero exit = unhealthy (after the grace period at start) |
 | `stall_after_s` | `1800` | flag it as stuck when neither its progress nor its log has moved for this long |
 | `metrics_url` | none | Prometheus metrics of the job's own server, for speed and engine stats |
+| `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke |
+| `comfy_url`, `idle_release_s` | none, `600` | governor jobs: the app's ComfyUI, to record each prompt it runs; revoke after this long with nothing to run (0 = never) |
 | driver fields | | `url`, `headers` (vllm, sglang, park-protocol); `park_cmd`, `resume_cmd`, `state_cmd` (command); `pid_file`, `pids`, `pids_cmd`, `pgrep`, `sudo`, `cuda_checkpoint` (cuda-checkpoint and adopted jobs) |
 
 ## `[[claim]]`

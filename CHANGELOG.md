@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.25.0
+
+- Jobs an app asks for (`driver = "governor"`). An app that starts its own GPU server when someone asks for work
+  asks GapRunner for a reservation and waits in the queue in the job's place; GapRunner admits it like any job and
+  revokes the reservation when it needs the GPU back (the app's server gets SIGTERM, then SIGKILL after `grace_s`).
+  The protocol is the workload-governor one Imagination Studio uses (`SPARK_GOVERNOR`): GapRunner writes the folder
+  the app reads (`governor_dir`) and serves its admission socket, open to the users in `governor_uids`. A request not
+  admitted within `admit_wait_s` is refused, so the app can render elsewhere. A job nothing has asked for shows as
+  **idle** and holds no place on the GPU. In shadow mode requests are admitted at once.
+- With `comfy_url`, each prompt such an app runs is recorded in `governor-<job>.jsonl` (sizes, lengths, steps, the
+  model files, time, status, GPU and host memory at the peak), and the reservation is revoked after `idle_release_s`
+  with nothing to run.
+
 ## 0.24.1
 
 - The page shows Stop for a job that stepped aside by freezing or sleeping and still holds memory. Before, Stop

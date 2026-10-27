@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 HOT, PARKED, PARKING, RESUMING, UNKNOWN = "hot", "parked", "parking", "resuming", "unknown"
 DONE, FAILED = "done", "failed"
 STOPPED, STARTING = "stopped", "starting"   # a service stopped for an exclusive window, and coming back           # a job started from its recipe that has exited (0 / non-zero)
+IDLE = "idle"           # a job that runs only when an app asks for it (driver "governor"), and nothing has asked
 
 
 @dataclass
@@ -322,7 +323,7 @@ def plan_wake(snap, service=None, reserve_gib=0.0):
 
 def explain(snap, gaps, policy):
     """Why each job is (or isn't) on the GPU right now, in words a person can act on. {name: (word, sentence)}.
-    word: running | next | held | window | waiting | parking | resuming | unknown | disabled."""
+    word: running | next | held | window | waiting | parking | resuming | unknown | disabled | idle."""
     out = {}
     services_parked = all(s.state in (PARKED, STOPPED) for s in snap.services)
     used = max(committed_gib(snap), snap.gpu_used_gib or 0.0)
@@ -342,6 +343,9 @@ def explain(snap, gaps, policy):
             sv = _svc_names(snap)
             out[j.name] = ("running", f"running alongside {sv}" + (f"; gives way while {sv} answers" if j.coexist == "yield" else "")
                            if j.coexist != "no" else f"running while {sv} sleeps; steps aside when {sv} gets a request")
+            continue
+        if j.state == IDLE:
+            out[j.name] = ("idle", "nothing has asked for it; it joins the queue in its place when its app asks")
             continue
         if j.state in (DONE, FAILED):
             out[j.name] = (j.state, "finished" if j.state == DONE else "failed: it exited with an error and isn't retried. "

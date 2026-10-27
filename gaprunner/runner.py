@@ -77,6 +77,9 @@ class Runner:
                                    "progress_at": 0.0, "save_point": None, "save_run_s": None, "save_checked": 0.0,
                                    "result": _read_json(self._result_path(j["name"])),
                                    "frozen": os.path.exists(self._frozen_path(j["name"]))}
+        from .governor import Governor, GovernorJob
+        govs = [e["driver"] for e in self.job.values() if isinstance(e["driver"], GovernorJob)]
+        self.governor = Governor(self, govs) if govs else None
         self.count_lock = threading.Lock()
         self.last_plan = None
         self.recent = []
@@ -925,8 +928,9 @@ class Runner:
         jobs = []
         for n, e in self.job.items():
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
+            waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
-                            sp["order"], sp["hold"], sp["window_only"], sp["enabled"], e["waiting_since"], e["parked_at"],
+                            sp["order"], sp["hold"], sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
                             float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],
@@ -939,6 +943,8 @@ class Runner:
             return []                      # a wake is in progress; it owns the GPU this instant
         try:
             self.refresh()
+            if self.governor is not None:
+                self.governor.tick()
             snap = self.snapshot()
             acts = decide(snap, {n: e["gaps"] for n, e in self.svc.items()}, self.policy)
             plan = [(a.kind, a.target) for a in acts]
@@ -1231,6 +1237,8 @@ class Runner:
 
     def run_forever(self):
         threading.Thread(target=self._discover_forever, daemon=True, name="discover").start()
+        if self.governor is not None:
+            self.governor.start()
         self.settle_until = self.clock() + 15
         self.refresh()
         self.audit("start", mode=self.top["mode"], services=list(self.svc), jobs=list(self.job),

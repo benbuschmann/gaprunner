@@ -523,7 +523,7 @@ footer { color: var(--faint); font-size: 12px; padding: 40px 0 30px; }
       <p><b>Many jobs at once:</b> tick jobs in the queue (shift-click for a range, or Select all) and act on all of them. <b>Queue in order</b> makes each start when the one before it finishes, in the order shown. Drag ⠿ to reorder. <b>Clear</b> hides finished jobs under Cleared; Start brings one back. The chips above the queue filter it; Active hides done and cleared jobs.</p>
       <p><b>Runs:</b> alongside prod, alongside prod giving way, only while prod sleeps, or only during slow-wake prod (or no prod).</p>
       <h3>What a job is doing</h3>
-      <p>Running, giving way (paused for a moment while prod answers), paused (by you), starting, queued (waits for another job to finish), waiting (with the reason), winding down, wound down, waits for slow-wake prod, idea (not set up to run yet), done, failed (not retried), stuck (running but not progressing).</p>
+      <p>Running, giving way (paused for a moment while prod answers), paused (by you), starting, queued (waits for another job to finish), waiting (with the reason), winding down, wound down, waits for slow-wake prod, idle (a job its app starts, and nothing has asked yet), idea (not set up to run yet), done, failed (not retried), stuck (running but not progressing).</p>
       <h3>Prod</h3>
       <p>Answering, awake, asleep (wakes on the next request, typically in a second or two), off, starting, switching. A service can have several models; <b>Switch</b> stops the current one, freeing its GPU and CPU memory, and starts the other. Jobs can require a model and step aside when it stops serving.</p>
       <h3>Whole system</h3>
@@ -601,6 +601,7 @@ function catOf(n) {
   if (q && q.archived) return 'cleared';
   if (j.word === 'done') return 'done';
   if (j.word === 'failed') return 'failed';
+  if (j.word === 'idle') return 'idle';
   if (j.state === 'hot' || j.frozen) return 'running';
   if (j.hold || j.word === 'held') return 'wound';
   if (j.word === 'window') return 'big';
@@ -608,7 +609,7 @@ function catOf(n) {
 }
 const QFILTERS = [['active', 'Active', c => !['done', 'cleared'].includes(c)], ['running', 'Running', c => c === 'running'],
   ['queued', 'Queued', c => c === 'queued'], ['big', 'Slow-wake prod', c => c === 'big'], ['wound', 'Wound down', c => c === 'wound'], ['done', 'Done', c => c === 'done'],
-  ['failed', 'Failed', c => c === 'failed'], ['idea', 'Ideas', c => c === 'idea'], ['cleared', 'Cleared', c => c === 'cleared'], ['all', 'All', () => true]];
+  ['failed', 'Failed', c => c === 'failed'], ['idle', 'Idle', c => c === 'idle'], ['idea', 'Ideas', c => c === 'idea'], ['cleared', 'Cleared', c => c === 'cleared'], ['all', 'All', () => true]];
 const shown = () => { const f = (QFILTERS.find(x => x[0] === QF) || QFILTERS[0])[2];
   const l = S.queue.map(q => q.name).filter(n => f(catOf(n)));
   return [...l.filter(n => S.jobs[n]), ...l.filter(n => !S.jobs[n])];                  // ideas after runnable jobs
@@ -863,7 +864,8 @@ function jobWord(j) {
   if (j.word === 'blocked' && (j.after || []).length) return ['queued', 'wait'];
   return ({running: ['running', 'run'], next: ['starting', 'run'], waiting: ['waiting', 'wait'], window: [`waits for slow-wake ${SV()}`, 'big'],
     blocked: ['waiting', 'wait'], done: ['done', 'off'], failed: ['failed', 'bad'], stalled: ['stuck', 'bad'], unknown: ['unknown', 'bad'],
-    disabled: ['off', 'off'], parking: ['stepping aside', 'wait'], resuming: ['coming back', 'wait']})[j.word] || [j.word, 'wait'];
+    disabled: ['off', 'off'], parking: ['stepping aside', 'wait'], resuming: ['coming back', 'wait'],
+    idle: ['idle', 'off']})[j.word] || [j.word, 'wait'];
 }
 const RUNS = [['share', 'Runs alongside prod'], ['yield', 'Runs alongside prod, gives way'], ['no', 'Runs only while prod sleeps'], ['big', 'Runs only during slow-wake prod']];
 const runsOf = (q, j) => (q && q.window_only) || j.window_only ? 'big' : (j.coexist || 'no');
@@ -1037,7 +1039,7 @@ function timeOf(n) {
   return [null, ''];
 }
 const SORTS = {queue: n => S.queue.findIndex(q => q.name === n), name: n => n.toLowerCase(),
-  status: n => ['running', 'queued', 'wound', 'failed', 'idea', 'done', 'cleared'].indexOf(catOf(n)),
+  status: n => ['running', 'queued', 'wound', 'idle', 'failed', 'idea', 'done', 'cleared'].indexOf(catOf(n)),
   progress: n => (S.jobs[n] || {}).progress ?? -1, speed: n => (((S.jobs[n] || {}).tps) || {}).out ?? -1,
   gpu: n => S.holders[n] || 0, time: n => timeOf(n)[0] ?? 0};
 function rowHtml(n, opt) {

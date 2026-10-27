@@ -24,6 +24,9 @@ TOP_DEFAULTS = {
     "notify_file": None,         # and/or append each alert as a JSON line here (for a relay to forward)
     "windows": [],               # optional daily windows, local time, "HH:MM-HH:MM"
     "pause_file": None,          # kill switch; default <state_dir>/PAUSE
+    "governor_dir": None,        # for driver = "governor" jobs: the folder apps read (client modules, reservations,
+                                 # admission socket); default <state_dir>/governor
+    "governor_uids": [],         # other users whose apps may ask (Linux); GapRunner's own user always may
 }
 SERVICE_REQUIRED = ("name", "driver", "upstream", "listen")
 ENGINE_REQUIRED = ("name", "driver", "upstream")
@@ -67,6 +70,9 @@ def parse(raw):
     top["window_file"] = expand(top["window_file"]) or os.path.join(top["state_dir"], "WINDOW")
     top["ui_pin_file"] = expand(top["ui_pin_file"])
     top["notify_file"] = expand(top["notify_file"])
+    top["governor_dir"] = expand(top["governor_dir"]) or os.path.join(top["state_dir"], "governor")
+    if not isinstance(top["governor_uids"], list) or not all(isinstance(u, int) for u in top["governor_uids"]):
+        raise ConfigError("gaprunner.governor_uids must be a list of numeric user ids")
     for w in top["windows"]:
         _parse_window(w)
     pol = raw.get("policy", {})
@@ -133,6 +139,14 @@ def parse(raw):
             raise ConfigError(f"job {j['name']}: fallback can only be \"restart\"")
         if j.get("fallback") and not j.get("start_cmd"):
             raise ConfigError(f"job {j['name']}: fallback = \"restart\" needs a start_cmd to run it again")
+        if j["driver"] == "governor":
+            _need(j, ("owner",), "job")
+            if j.get("start_cmd"):
+                raise ConfigError(f"job {j['name']}: a governor job is started by its app, not by a start_cmd")
+            j.setdefault("admit_wait_s", 300.0)   # how long a request may wait in the queue before it is refused
+            j.setdefault("grace_s", 30.0)         # after a revoke: SIGTERM, then SIGKILL after this long
+            # a revoke stops the app's work in progress (a render is lost), so it counts as losing work
+            j.setdefault("loses_work", True)
         j.setdefault("park_s", 5.0)
         j.setdefault("resume_s", 5.0)
         # a job that loses its unsaved work when it steps aside (stopped and started again) needs a quiet spell long
@@ -148,6 +162,9 @@ def parse(raw):
         j.setdefault("enabled", True)
         if j.get("color") is not None and j["color"] not in JOB_COLORS:
             raise ConfigError(f"job {j['name']}: color must be one of {', '.join(JOB_COLORS)}")
+    owners = [j["owner"] for j in jobs if j["driver"] == "governor"]
+    if len(set(owners)) != len(owners):
+        raise ConfigError("two governor jobs have the same owner")
     for x in services + jobs:
         if x["name"] in names:
             raise ConfigError(f"duplicate name {x['name']}")

@@ -1,0 +1,297 @@
+"""driver = "governor": jobs an app asks for. The app side is the real admission client, run as its own process."""
+import http.server
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+import fakes  # noqa: F401 -- test settings (no host-memory reading, immediate process discovery)
+from test_scheduler import LONG, POL, job, kinds, snap
+from gaprunner import config as C
+from gaprunner import governor as GV
+from gaprunner.gpu import FakeGpu
+from gaprunner.scheduler import HOT, IDLE, PARKED, PARKING, Policy, decide, explain
+
+LINUX = os.path.exists("/proc/self/stat")
+ONE = Policy(**{**POL.__dict__, "max_active_jobs": 1})
+
+
+class StubRunner:
+    def __init__(self, folder, live=True):
+        self.top = {"governor_dir": folder, "governor_uids": [], "state_dir": folder}
+        self.live, self.gpu, self.events, self.parked, self.closed = live, FakeGpu(100.0), [], [], []
+
+    def audit(self, event, **kw):
+        self.events.append((event, kw))
+
+    def _close_gpu_peak(self, name):
+        self.closed.append(name)
+
+    def _park_job(self, name, reason=""):
+        self.parked.append((name, reason))
+
+
+def spec(**kw):
+    return {"name": "WASS video", "driver": "governor", "owner": "studio-comfy", "timeout_s": 10, "grace_s": 2,
+            "admit_wait_s": 30, **kw}
+
+
+def wait_for(cond, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+class GovernorConfigTest(unittest.TestCase):
+    base = {"service": [{"name": "prod", "driver": "vllm", "upstream": "http://x", "listen": "127.0.0.1:0", "gpu_gib": 1}]}
+
+    def test_defaults_and_rules(self):
+        cfg = C.parse({**self.base, "job": [{"name": "v", "driver": "governor", "owner": "o", "gpu_gib": 70}]})
+        j = cfg["jobs"][0]
+        self.assertTrue(j["loses_work"])
+        self.assertEqual((j["admit_wait_s"], j["grace_s"]), (300.0, 30.0))
+        self.assertTrue(cfg["gaprunner"]["governor_dir"].endswith("governor"))
+        with self.assertRaises(C.ConfigError):        # the app starts it
+            C.parse({**self.base, "job": [{"name": "v", "driver": "governor", "owner": "o", "gpu_gib": 1, "start_cmd": "x"}]})
+        with self.assertRaises(C.ConfigError):        # who asks?
+            C.parse({**self.base, "job": [{"name": "v", "driver": "governor", "gpu_gib": 1}]})
+        with self.assertRaises(C.ConfigError):
+            C.parse({**self.base, "job": [{"name": "a", "driver": "governor", "owner": "o", "gpu_gib": 1},
+                                          {"name": "b", "driver": "governor", "owner": "o", "gpu_gib": 1}]})
+        with self.assertRaises(C.ConfigError):
+            C.parse({**self.base, "gaprunner": {"governor_uids": ["studio"]}})
+
+
+class GovernorSchedulingTest(unittest.TestCase):
+    def test_an_idle_job_takes_no_place(self):
+        s = snap(svc_state=PARKED, jobs=[job("wass", state=IDLE, order=0), job("train", order=1)])
+        self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "train")])
+        self.assertEqual(explain(s, LONG, ONE)["wass"][0], "idle")
+
+    def test_a_request_takes_its_place_at_the_top(self):
+        # the app asked: the job waits in its place and pushes the training job (lower, keeps its work) aside
+        s = snap(svc_state=PARKED, jobs=[job("wass", order=0, loses_work=True), job("train", state=HOT, order=1)])
+        acts = decide(s, LONG, ONE)
+        self.assertEqual(kinds(acts), [("park_job", "train")])
+        self.assertIn("makes room for wass", acts[0].reason)
+
+
+class ShapeTest(unittest.TestCase):
+    def test_shape_of_a_prompt(self):
+        prompt = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "fasth3_8step.safetensors"}},
+                  "2": {"class_type": "EmptyLatentVideo", "inputs": {"width": 864, "height": 480, "length": 124}},
+                  "3": {"class_type": "KSampler", "inputs": {"steps": 8, "cfg": 1.0, "seed": 7, "model": ["1", 0]}},
+                  "4": {"class_type": "LoraLoader", "inputs": {"lora_name": "horror80s.safetensors", "strength": 1.0}}}
+        out = GV.shape_of(prompt)
+        self.assertEqual(out["shape"], {"width": 864, "height": 480, "length": 124, "steps": 8, "cfg": 1.0})
+        self.assertEqual(out["models"], ["fasth3_8step.safetensors", "horror80s.safetensors"])
+        self.assertEqual(out["nodes"]["KSampler"], 1)
+
+
+@unittest.skipUnless(LINUX, "process sessions are read from /proc")
+class GovernorProtocolTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="gr-gov-")
+        self.runner = StubRunner(self.dir)
+        self.job = GV.GovernorJob(spec())
+        self.gov = GV.Governor(self.runner, [self.job])
+        self.gov.start()
+        self.procs = []
+
+    def tearDown(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+            p.stderr.close()
+        self.gov.stop()
+
+    def launch(self, *cmd, owner="studio-comfy"):
+        p = subprocess.Popen([sys.executable, os.path.join(self.dir, "admission_client.py"), "--owner", owner,
+                              "--workload", "h3", "--socket", self.gov.sock_path, "--estimated-incremental-gib", "85",
+                              "--run", *cmd], stderr=subprocess.PIPE, text=True)
+        self.procs.append(p)
+        return p
+
+    def rpc(self, req):
+        sys.path.insert(0, self.dir)
+        import admission_client
+        return admission_client.rpc(req, self.gov.sock_path)
+
+    def rows(self):
+        with open(os.path.join(self.dir, "state", "reservations.json")) as f:
+            return json.load(f)["reservations"]
+
+    def test_the_folder_holds_what_the_app_imports(self):
+        for name in GV.CLIENT_FILES:
+            self.assertTrue(os.path.exists(os.path.join(self.dir, name)))
+        self.assertEqual(self.rows(), [])
+        self.assertTrue(self.rpc({"op": "preflight", "owner": "studio-comfy"})["allowed"])
+        self.assertFalse(self.rpc({"op": "preflight", "owner": "someone"})["allowed"])
+
+    def test_ask_wait_grant_release(self):
+        p = self.launch("sleep", "1")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))       # waiting in the queue, not running
+        self.assertEqual(self.rows(), [])
+        self.job.resume()                                                    # the scheduler admits it
+        self.assertEqual(self.job.state(), HOT)
+        row = self.rows()[0]
+        self.assertEqual(row["owner"], "studio-comfy")
+        self.assertTrue(self.job.pids())
+        # what the app checks before each submission: its reservation's session holds its server
+        self.assertTrue(set(self.job.pids()) & set(GV.PB.session(row["binding"])))
+        self.assertEqual(p.wait(10), 0)
+        self.assertTrue(wait_for(lambda: self.job.state() == IDLE))
+        self.assertEqual(self.rows(), [])
+        self.gov.tick()
+        names = [e for e, _ in self.runner.events]
+        self.assertIn("governor_request", names)
+        self.assertIn("governor_grant", names)
+        self.assertIn("governor_release", names)
+
+    def test_revoke_stops_the_command(self):
+        p = self.launch("sleep", "60")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        self.assertEqual(self.job.state(), HOT)
+        t0 = time.monotonic()
+        self.job.park()
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual(self.job.state(), IDLE)
+        self.assertNotEqual(p.wait(10), 0)                                  # the command was stopped, not finished
+        self.assertEqual(self.rows(), [])
+
+    def test_a_command_that_ignores_sigterm_is_killed_after_the_grace(self):
+        p = self.launch("sh", "-c", "trap '' TERM; sleep 60")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        t0 = time.monotonic()
+        self.job.park()
+        self.assertGreaterEqual(time.monotonic() - t0, 1.5)                  # grace_s = 2
+        self.assertEqual(self.job.state(), IDLE)
+        p.wait(10)
+
+    def test_one_reservation_at_a_time(self):
+        self.launch("sleep", "30")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        second = self.launch("true")
+        self.assertEqual(second.wait(10), 3)
+        self.assertIn("already has", second.stderr.read())
+
+    def test_a_request_nobody_admits_is_refused_in_time(self):
+        self.job.spec["admit_wait_s"] = 0.5
+        p = self.launch("true")
+        self.assertEqual(p.wait(10), 3)
+        self.assertIn("did not make room", p.stderr.read())
+        self.assertEqual(self.job.state(), IDLE)
+        self.assertFalse(self.rpc({"op": "status", "owner": "studio-comfy"})["allowed"])   # don't ask again at once
+
+    def test_unknown_owner(self):
+        p = self.launch("true", owner="nobody")
+        self.assertEqual(p.wait(10), 3)
+
+    def test_a_killed_launcher_leaves_the_reservation_until_its_session_ends(self):
+        p = self.launch("sleep", "2")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        pids = self.job.pids()
+        p.kill()
+        p.wait()
+        self.assertEqual(self.job.state(), HOT)                              # the command still holds the GPU
+        self.assertTrue(wait_for(lambda: self.job.state() == IDLE, 10))      # ... until it ends
+        self.assertFalse(any(os.path.exists(f"/proc/{x}") and GV.PB.process(x)["state"] != "Z" for x in pids))
+
+    def test_a_restarted_gaprunner_takes_the_reservation_back(self):
+        p = self.launch("sleep", "30")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        self.gov.stop()                                                      # GapRunner restarts
+        job2 = GV.GovernorJob(spec())
+        gov2 = GV.Governor(self.runner, [job2])
+        gov2.start()
+        try:
+            self.assertTrue(wait_for(lambda: job2.state() == HOT, 15))
+            self.assertEqual(self.rows()[0]["owner"], "studio-comfy")
+            job2.park()
+            self.assertNotEqual(p.wait(10), 0)
+        finally:
+            gov2.stop()
+
+    def test_shadow_mode_admits_at_once(self):
+        self.runner.live = False
+        p = self.launch("sleep", "0.5")
+        self.assertEqual(p.wait(10), 0)
+        self.assertIn("governor_shadow_grant", [e for e, _ in self.runner.events])
+
+
+class FakeComfy:
+    def __init__(self):
+        self.running, self.history = [], {}
+        fake = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.path == "/queue":
+                    body = {"queue_running": [[0, pid, {}, {}, []] for pid in fake.running], "queue_pending": []}
+                elif self.path.startswith("/history/"):
+                    pid = self.path.rsplit("/", 1)[1]
+                    body = {pid: fake.history[pid]} if pid in fake.history else {}
+                else:
+                    body = {}
+                d = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(d)))
+                self.end_headers()
+                self.wfile.write(d)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+
+class RecorderTest(unittest.TestCase):
+    def test_one_row_per_prompt_and_idle_release(self):
+        d = tempfile.mkdtemp(prefix="gr-rec-")
+        comfy = FakeComfy()
+        runner = StubRunner(d)
+        j = GV.GovernorJob(spec(comfy_url=comfy.url, idle_release_s=0.3))
+        gov = GV.Governor(runner, [j])
+        r = GV.Request("tok", {}, None, {})
+        r.granted_at, r.binding = time.time(), None
+        r.granted.set()
+        j.req = r
+        rec = gov.recorders["WASS video"]
+        rec.poll()                                                   # ComfyUI answers: "ready"
+        comfy.running = ["p1"]
+        rec.poll()
+        comfy.running = []
+        comfy.history["p1"] = {"prompt": [0, "p1", {"2": {"class_type": "EmptyLatentVideo",
+                                                         "inputs": {"width": 1376, "height": 768, "length": 243}}}],
+                               "status": {"status_str": "success", "messages": [
+                                   ["execution_start", {"timestamp": 1000}], ["execution_success", {"timestamp": 494000}]]}}
+        rec.poll()
+        with open(rec.path) as f:
+            rows = [json.loads(x) for x in f]
+        self.assertEqual([x["event"] for x in rows], ["ready", "prompt"])
+        self.assertEqual(rows[1]["shape"], {"width": 1376, "height": 768, "length": 243})
+        self.assertEqual(rows[1]["seconds"], 493.0)
+        self.assertEqual(rows[1]["status"], "success")
+        time.sleep(0.4)
+        gov.tick()                                                   # idle longer than idle_release_s: revoked
+        self.assertEqual(runner.parked[0][0], "WASS video")
+        comfy.server.shutdown()
+
+
+if __name__ == "__main__":
+    unittest.main()

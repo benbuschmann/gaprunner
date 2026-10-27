@@ -17,6 +17,7 @@ Kinds:
   command          Shell hooks (park_cmd / resume_cmd / state_cmd), llmux-style.
   restart          For jobs that resume from their own checkpoints (item-resume benchmarks, step-save training):
                    park = SIGTERM (then SIGKILL after timeout_s), resume = run the recipe's start_cmd again.
+  governor         A job its app asks for (governor.py): resume = grant the app's reservation, park = revoke it.
 """
 import json
 import os
@@ -421,6 +422,9 @@ KINDS = {"vllm": Vllm, "sglang": Sglang, "park-protocol": ParkProtocol, "cuda-ch
 
 def make(spec):
     kind = spec.get("driver")
+    if kind == "governor":                        # a job an app asks for (governor.py)
+        from .governor import GovernorJob
+        return GovernorJob(spec)
     if kind not in KINDS:
-        raise ValueError(f"{spec.get('name')}: driver must be one of {', '.join(KINDS)}")
+        raise ValueError(f"{spec.get('name')}: driver must be one of {', '.join([*KINDS, 'governor'])}")
     return KINDS[kind](spec)

@@ -171,6 +171,52 @@ start_cmd = "..."
 4. **Parked**: a `restart` job is stopped. GapRunner starts it again (same `start_cmd`) in a later gap, and it picks up from its checkpoint.
 5. **Done / failed**: a small wrapper writes the exit code to `<state_dir>/job-<name>.result.json`, even if GapRunner is down at that moment. Exit 0 is **done**, anything else is **failed**. Neither is restarted automatically. To run it again, press **Start** (or **Queue**) on the page: that clears the recorded exit and lets it start.
 
+## Apps that ask before they start (`driver = "governor"`)
+
+Some apps start their own GPU server when a person asks for work, and stop it when they're done. A video studio's
+renderer is a typical one. GapRunner can't start these from a recipe, but it can decide when they may start: the app
+asks for a reservation, waits in GapRunner's queue in the job's place, and starts its server once GapRunner has made
+room. When GapRunner needs the GPU back it revokes the reservation and the app's server is stopped.
+
+The protocol is the workload-governor one Imagination Studio uses (`SPARK_GOVERNOR`). GapRunner writes the folder the
+app reads (`governor_dir`): three small client modules, `state/reservations.json` and the socket `state/admission.sock`.
+
+```toml
+[gaprunner]
+mode = "live"
+governor_dir = "/var/tmp/gaprunner-governor"   # the app's user must be able to read it
+governor_uids = [1006]                          # the app runs as another user (Linux)
+
+[[job]]
+name = "Video renders"
+driver = "governor"
+owner = "tensorfold-studio-comfy-8190"          # the name the app asks under
+order = 0                                       # top of the queue: renders go first, training waits
+gpu_gib = 75                                    # the largest render it is allowed to take
+comfy_url = "http://127.0.0.1:8190"             # optional: record each render, and release the GPU when idle
+idle_release_s = 600                            # with comfy_url: revoke after this long with nothing to render
+admit_wait_s = 300                              # a request not admitted by then is refused (the app can render elsewhere)
+grace_s = 30                                    # after a revoke: SIGTERM, then SIGKILL after this long
+```
+
+On the app's side, set `SPARK_GOVERNOR=/var/tmp/gaprunner-governor` in the environment its renderer starts in.
+
+On the page the job is **idle** while nothing has asked, **waiting** in its place once the app asks, and **running**
+while the reservation is held. Wind down keeps it from being admitted: a request then waits `admit_wait_s` and is
+refused. Stepping aside loses the render in progress, so the job counts as losing work. A job lower in the queue never
+pushes it aside, and max active jobs counts it like any other job.
+
+**What is recorded.** With `comfy_url`, each prompt the app runs adds a row to `<state_dir>/governor-<job>.jsonl`:
+its sizes, lengths and steps (`width`, `height`, `length`, `steps`, ...), the model files it loaded, how long it took,
+its status, and the GPU and host memory the app's processes held at the peak. A `ready` row records how long the app
+took from the grant to its server's first answer. You need these numbers before letting such an app use short quiet
+spells: how much memory each kind of work takes, and how long it runs.
+
+**In shadow mode** a request is admitted at once, and the work is still recorded.
+
+**Who may ask.** GapRunner's own user, plus the uids in `governor_uids` (checked with `SO_PEERCRED`). The folder must
+belong to GapRunner's user; GapRunner refuses one that doesn't.
+
 ## Adopting a job you start yourself
 
 Leave out `start_cmd` and tell GapRunner how to find the job's processes with `pid_file`, `pids`, `pgrep` (a regex over command lines) or `pids_cmd` (a shell command that prints pids, e.g. `docker top <container> -eo pid | tail -n +2` for a container). GapRunner can still pause, park and resume it with the driver you choose, but it can't see its exit code, so such a job is never marked done or failed.
