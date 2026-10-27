@@ -149,7 +149,7 @@ class GovernorProtocolTest(unittest.TestCase):
         self.assertTrue(set(self.job.pids()) & set(GV.PB.session(row["binding"])))
         self.assertEqual(p.wait(10), 0)
         self.assertTrue(wait_for(lambda: self.job.state() == IDLE))
-        self.assertEqual(self.rows(), [])
+        self.assertTrue(wait_for(lambda: self.rows() == []))
         self.gov.tick()
         names = [e for e, _ in self.runner.events]
         self.assertIn("governor_request", names)
@@ -166,7 +166,7 @@ class GovernorProtocolTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 5)
         self.assertEqual(self.job.state(), IDLE)
         self.assertNotEqual(p.wait(10), 0)                                  # the command was stopped, not finished
-        self.assertEqual(self.rows(), [])
+        self.assertTrue(wait_for(lambda: self.rows() == []))
 
     def test_a_command_that_ignores_sigterm_is_killed_after_the_grace(self):
         ready = os.path.join(self.dir, "trapped")

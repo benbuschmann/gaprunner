@@ -281,9 +281,9 @@ class Governor:
         self.write_reservations()
 
     def write_reservations(self):
-        rows = [row for j in self.by_owner.values() for row in j.reservations()]
         path = os.path.join(self.state_dir, "reservations.json")
-        with self.lock:
+        with self.lock:                       # read and write under one lock: a slower writer never puts back old rows
+            rows = [row for j in self.by_owner.values() for row in j.reservations()]
             with open(path + ".tmp", "w") as f:
                 json.dump({"reservations": rows, "t": round(time.time(), 1)}, f)
             os.chmod(path + ".tmp", 0o644)
