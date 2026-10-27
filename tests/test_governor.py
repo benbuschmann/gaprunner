@@ -169,9 +169,11 @@ class GovernorProtocolTest(unittest.TestCase):
         self.assertEqual(self.rows(), [])
 
     def test_a_command_that_ignores_sigterm_is_killed_after_the_grace(self):
-        p = self.launch("sh", "-c", "trap '' TERM; sleep 60")
+        ready = os.path.join(self.dir, "trapped")
+        p = self.launch("sh", "-c", f"trap '' TERM; touch {ready}; sleep 60")
         self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
         self.job.resume()
+        self.assertTrue(wait_for(lambda: os.path.exists(ready)))      # it ignores SIGTERM from here on
         t0 = time.monotonic()
         self.job.park()
         self.assertGreaterEqual(time.monotonic() - t0, 1.5)                  # grace_s = 2
