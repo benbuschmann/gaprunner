@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.0
+
+- A service isn't put to sleep while its `warm_cmd` is still running after a start or a wake (at most
+  `warm_hold_max_s`, default 300 s). Seen on a GB300: a service put to sleep 14 s after a cold start, in the middle of
+  its warm-up, crashed its engine.
+- A service that fails to wake no longer makes every request wait out another wake. Requests get a 503 at once that
+  says why, and when the service has `stop_cmd` and `start_cmd`, GapRunner restarts it (a `service_restart` event),
+  the way the end of a no-service period starts it again. Without them, a request may try a wake again after
+  `dead_retry_s` (default 60 s). Set `restart_on_failed_wake = false` to keep the old behaviour. Before, each request
+  to a crashed engine waited the full wake timeout, and those waits held the lock that stopping the service needed.
+
 ## 0.23.0
 
 - Host memory a park takes is measured. GapRunner reads MemAvailable before and after each park of a service or job

@@ -59,7 +59,7 @@ class Runner:
                                    "cost_key": engines[current]["cost_key"], "state": UNKNOWN, "inflight": 0,
                                    "job_inflight": 0, "last_done": clock(), "gaps": GapModel.load(self._gap_path(s["name"])),
                                    "stopping": False, "stopped": False, "starting_since": None, "released": False,
-                                   "switching": None, "schedule_slot": None}
+                                   "switching": None, "schedule_slot": None, "dead_since": None, "wake_failures": 0}
         self.job = {}
         for j in cfg["jobs"]:
             self.costs.seed(j["name"], "park", j["park_s"])
@@ -276,10 +276,38 @@ class Runner:
             total = round(self.clock() - t0, 3)
             self.audit("request_wake", service=name, ok=ok, total_s=total,
                        **({"over_budget_s": round(total - self.policy.max_added_wait_s, 3)} if total > self.policy.max_added_wait_s else {}))
-            if not ok:
+            if ok:
+                s["dead_since"], s["wake_failures"] = None, 0
+            else:
+                # requests fail fast from now on instead of each waiting out another wake; the tick restarts it
+                s["dead_since"], s["wake_failures"] = self.clock(), s["wake_failures"] + 1
                 from . import health
-                health.notify(self, "warn", name, f"{name} failed to wake for a request (see Events)")
+                health.notify(self, "warn", name, f"{name} failed to wake for a request"
+                              + (": restarting it" if self._restartable(name) else "; requests get 503 until it answers"))
             return ok
+
+    def _restartable(self, name):
+        s = self.svc[name]
+        return bool(s["spec"].get("stop_cmd") and s["spec"].get("start_cmd") and s["spec"]["restart_on_failed_wake"])
+
+    def _recover(self):
+        """A service that failed to wake: restart it (stop_cmd, then start_cmd) when it can be, the way the end of a
+        no-service period starts it again; otherwise let requests try to wake it again after dead_retry_s."""
+        for n, s in self.svc.items():
+            if s["dead_since"] is None or s["stopped"] or s["stopping"] or s["starting_since"] is not None:
+                continue
+            sp = s["spec"]
+            if not self._restartable(n):
+                if self.clock() - s["dead_since"] >= sp.get("dead_retry_s", 60):
+                    s["dead_since"] = None                     # the next request tries a wake again
+                continue
+            for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
+                self._park_job(jn, reason=f"{n} is restarting after a failed wake")
+            self.audit("service_restart", target=n, reason=f"failed to wake ({s.get('last_error') or 'no answer'})")
+            self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
+            if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
+                s["starting_since"], s["state"] = self.clock(), STARTING
+            s["dead_since"] = None
 
     def switch_engine(self, name, target, reason="by hand"):
         """Switch a service to another engine in a background thread. The old engine is stopped (its stop_cmd)
@@ -393,7 +421,10 @@ class Runner:
             w = C.window_until(self.top)
             return f"{name} is off (no {name}) so jobs can use the whole GPU" + (f", until {time.strftime('%H:%M', time.localtime(w))}" if w else "")
         if s["starting_since"] is not None:
-            return f"{name} is starting again after no {name} (since {time.strftime('%H:%M', time.localtime(s['starting_since']))})"
+            return f"{name} is starting again (since {time.strftime('%H:%M', time.localtime(s['starting_since']))})"
+        if s["dead_since"] is not None:
+            return (f"{name} failed to wake at {time.strftime('%H:%M', time.localtime(s['dead_since']))}"
+                    + ("; it is being restarted" if self._restartable(name) else "; it will be tried again shortly"))
         return None
 
     def _windows(self):
@@ -605,6 +636,7 @@ class Runner:
             (d.park if op == "park" else d.resume)()
         except Exception as e:  # noqa: BLE001 -- any driver failure is logged and reported, never raised into the gate
             self.audit(f"{op}_failed", target=name, error=str(e)[:300], reason=reason)
+            entry["last_error"] = str(e)[:300]
             entry["state"] = d.state()
             return False
         dt_ = self.clock() - t0
@@ -885,7 +917,9 @@ class Runner:
                             self.host_park_gib(e["cost_key"],
                                                float(e["spec"]["parked"]["cpu_gib"] or 0) if e["released"] else
                                                max(0.0, float(e["spec"]["parked"]["cpu_gib"] or 0) -
-                                                   float(e["spec"]["running"]["cpu_gib"] or 0))))
+                                                   float(e["spec"]["running"]["cpu_gib"] or 0))),
+                            warming=e.get("warm_since") is not None and
+                            now - e["warm_since"] < e["spec"].get("warm_hold_max_s", 300))
                     for n, e in self.svc.items()]
         jobs = []
         for n, e in self.job.items():
@@ -935,6 +969,7 @@ class Runner:
                 elif a.kind == "resume_job":
                     self._resume_job(a.target, a.reason)
             self._windows()
+            self._recover()
             self._schedules()
         finally:
             self.lock.release()

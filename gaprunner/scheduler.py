@@ -40,6 +40,7 @@ class Service:
     idle_park_s: float = 30.0
     wake_s: float = 1.0
     park_cpu_gib: float = 0.0      # extra CPU memory it takes when parked (its weights moving to host RAM)
+    warming: bool = False          # its warm_cmd is still running after a start or wake: it isn't put to sleep yet
 
 
 @dataclass
@@ -274,7 +275,8 @@ def decide(snap, gaps, policy):
     worth_now = [j for j in waiting if gap_worth_it(snap, j, gaps, policy)[0]] if has_slot() else []
 
     for s in snap.services:
-        if s.state == HOT and s.inflight == 0 and snap.now - s.last_done >= s.idle_park_s and not snap.exclusive:
+        if s.state == HOT and s.inflight == 0 and snap.now - s.last_done >= s.idle_park_s and not snap.exclusive \
+                and not s.warming:
             if (worth_now or not policy.park_only_if_work) and cpu_ok(s.park_cpu_gib):
                 acts.append(Action("park_service", s.name, f"idle {snap.now - s.last_done:.0f}s"))
 
