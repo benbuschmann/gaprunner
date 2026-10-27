@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.0
+
+- Host memory a park takes is measured. GapRunner reads MemAvailable before and after each park of a service or job
+  and keeps the median of recent parks (the `park` event shows `host_gib`). Decisions use the larger of that and the
+  recipe's `parked.cpu_gib - running.cpu_gib`, so a recipe that understates it can no longer let host memory run out.
+  Seen on a GB300: a service declared at 41 GiB actually took about 170 GiB of host memory to sleep, which with a job
+  frozen in host memory would have run the machine out of memory. The job page shows the measured figure beside the
+  recipe's.
+- Each run's GPU peak is measured and shown on the job page beside the recipe's `running.hbm_gib`, marked when the
+  recipe understates it by more than 10%. Scheduling still uses the recipe's figure: some engines take whatever GPU
+  memory is free, so a measured peak isn't always what the job needs.
+- A job paused by hand no longer holds a max active jobs slot, as in qBittorrent, where a paused torrent doesn't count
+  toward the limit. Its GPU memory is still counted, so another job starts beside it only if it fits. When it is
+  resumed with the slots full, the active job lowest in the queue steps aside.
+
 ## 0.22.0
 
 - Host memory follows queue order. When a job needs to step aside by freezing or sleeping and its copy doesn't fit in

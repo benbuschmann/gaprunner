@@ -600,6 +600,7 @@ class Runner:
     # ---------- transitions ----------
     def _transition(self, entry, name, op, reason=""):
         d, t0 = entry["driver"], self.clock()
+        host0 = self.host_mem() if op == "park" else None
         try:
             (d.park if op == "park" else d.resume)()
         except Exception as e:  # noqa: BLE001 -- any driver failure is logged and reported, never raised into the gate
@@ -609,7 +610,14 @@ class Runner:
         dt_ = self.clock() - t0
         self.costs.record(entry.get("cost_key", name), op, dt_)
         entry["state"] = PARKED if op == "park" else HOT
-        self.audit(op, target=name, seconds=round(dt_, 3), reason=reason)
+        took = None
+        if host0 is not None and self.live:
+            host1 = self.host_mem()
+            if host1 is not None:          # host memory the park took (weights or a frozen copy moving to RAM)
+                took = round(max(0.0, host0 - host1), 1)
+                self.costs.record(entry.get("cost_key", name), "park_host", took)
+        self.audit(op, target=name, seconds=round(dt_, 3), reason=reason,
+                   **({"host_gib": took} if took is not None else {}))
         if op == "resume" and name in self.svc:
             self._warm(name)
         return True
@@ -648,7 +656,8 @@ class Runner:
                 os.remove(self._frozen_path(name))
             self._set_hold(name, True)
             self.audit("wound_down", target=name, reason="it was paused by hand and had to step aside for a service")
-        extra = float(j["spec"]["parked"]["cpu_gib"] or 0) - float(j["spec"]["running"]["cpu_gib"] or 0)
+        extra = self.host_park_gib(name, float(j["spec"]["parked"]["cpu_gib"] or 0) -
+                                   float(j["spec"]["running"]["cpu_gib"] or 0))
         free = self.host_mem()
         if free is not None and extra > 0 and free - extra < self.policy.cpu_floor_gib:
             # its frozen copy doesn't fit: first stop frozen jobs lower in the queue, last first
@@ -702,9 +711,26 @@ class Runner:
                 self.audit("gpu_hold", target=name, pids=left, note="killed processes still alive; no new starts")
                 from . import health
                 health.notify(self, "warn", name, f"GPU hold: {name} was killed but its processes are still alive")
+        self._close_gpu_peak(name)
         j["parked_at"] = self.clock()
         j["waiting_since"] = self.clock()
         return ok
+
+    def host_park_gib(self, key, declared):
+        """Host memory a park takes: the recipe's figure, or what GapRunner measured (MemAvailable before and after
+        its recent parks, median) when that is larger. A recipe that understates it would let host memory run out."""
+        measured, ok = self.costs.get(key, "park_host")
+        return max(float(declared or 0), float(measured or 0)) if ok else float(declared or 0)
+
+    def gpu_peak_gib(self, name):
+        """The job's measured GPU peak per run (median of its recent runs' peaks), or None before one is seen."""
+        v, ok = self.costs.get(name, "gpu_peak")
+        return v if ok else None
+
+    def _close_gpu_peak(self, name):
+        peak = self.job[name].pop("gpu_peak_now", None)
+        if peak:
+            self.costs.record(name, "gpu_peak", peak)
 
     def _evict_for_host(self, name, need_gib):
         """Make room in host memory for `name` to step aside by freezing: stop jobs that sit parked with their state
@@ -797,6 +823,7 @@ class Runner:
             p = j["proc"]
             if p is not None and p.poll() is not None:
                 j["proc"] = None
+                self._close_gpu_peak(n)
                 if j.pop("expect_exit", False):
                     # a park that stops only the job's own process (a command driver's park_cmd) leaves the wrapper
                     # alive to record the exit code; a stopped job hasn't finished, so that record is dropped
@@ -855,8 +882,10 @@ class Runner:
         services = [Service(n, e["state"], e["inflight"] + e["job_inflight"], max(e["last_done"], e.get("job_last_done", 0)),
                             e["spec"]["gpu_gib"], e["service"]["idle_park_s"],
                             self.costs.get(e["cost_key"], "resume")[0],
-                            float(e["spec"]["parked"]["cpu_gib"] or 0) if e["released"] else
-                            max(0.0, float(e["spec"]["parked"]["cpu_gib"] or 0) - float(e["spec"]["running"]["cpu_gib"] or 0)))
+                            self.host_park_gib(e["cost_key"],
+                                               float(e["spec"]["parked"]["cpu_gib"] or 0) if e["released"] else
+                                               max(0.0, float(e["spec"]["parked"]["cpu_gib"] or 0) -
+                                                   float(e["spec"]["running"]["cpu_gib"] or 0))))
                     for n, e in self.svc.items()]
         jobs = []
         for n, e in self.job.items():
@@ -865,7 +894,8 @@ class Runner:
                             sp["order"], sp["hold"], sp["window_only"], sp["enabled"], e["waiting_since"], e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
-                            float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"]))
+                            float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],
+                            frozen=e["frozen"]))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
                         self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
 
@@ -974,6 +1004,9 @@ class Runner:
         reading = self.gpu.read()
         now = self.clock()
         gib, measured, stow = self.holders(reading)
+        for n, e in self.job.items():           # each run's GPU peak, shown beside the recipe's figure
+            if e["state"] == HOT and measured.get(n) and gib.get(n):
+                e["gpu_peak_now"] = max(e.get("gpu_peak_now", 0.0), gib[n])
         busy = {n: bool(e["inflight"]) for n, e in self.svc.items()}
         row = {"t": round(now, 1), "used": (reading or {}).get("used_gib"), "total": (reading or {}).get("total_gib"),
                "h": gib, "stow": round(sum(p["gib"] for p in stow), 2),
@@ -1097,6 +1130,8 @@ class Runner:
                                                    "current": en == e["engine"], "notes": x["spec"].get("notes", "")}
                                               for en, x in e["engines"].items()},
                                   "cpu_gib_now": _rss_gib(e["driver"].pids()),
+                                  "host_park_gib": self.costs.get(e["cost_key"], "park_host")[0]
+                                  if self.costs.get(e["cost_key"], "park_host")[1] else None,
                                   "gpu_gib": e["spec"]["gpu_gib"], "idle_park_s": e["service"]["idle_park_s"],
                                   "driver": e["spec"]["driver"], "gap_samples": len(m),
                                   "p_idle_30s_more": m.p_continue(idle, 30), "median_more_idle_s": m.median_remaining(idle),
@@ -1106,6 +1141,9 @@ class Runner:
             out["jobs"][j.name] = {"state": e["state"], "order": j.order, "hold": j.hold, "window_only": j.window_only,
                                    "coexist": j.coexist, "paused": e["paused"], "running": e["spec"]["running"],
                                    "parked": e["spec"]["parked"], "cpu_gib_now": _rss_gib(e["driver"].pids()),
+                                   "host_park_gib": self.costs.get(j.name, "park_host")[0]
+                                   if self.costs.get(j.name, "park_host")[1] else None,
+                                   "gpu_peak_gib": self.gpu_peak_gib(j.name), "gpu_peak_now": e.get("gpu_peak_now"),
                                    "workdir": e["spec"].get("workdir"), "start_cmd": e["spec"].get("start_cmd"),
                                    "result": e["result"], "ssd_paths": e["spec"].get("ssd_paths", []),
                                    "goal": e["spec"].get("goal"), "progress": e["progress"], "health": e.get("health") or [],

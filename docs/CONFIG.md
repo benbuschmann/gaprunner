@@ -37,7 +37,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `starvation_s` | `3600.0` | a job waiting this long goes to the front of the queue |
 | `reserve_gib` | `4.0` | GPU memory always kept free |
 | `cpu_floor_gib` | `16.0` | CPU memory always kept free (no start or sleep below it) |
-| `max_active_jobs` | `0` (no limit) | at most this many jobs on the GPU at once; the rest wait their turn in queue order (qBittorrent's "Max active torrents"). A job higher in the queue that could start pushes the active job lowest in the queue aside, unless that job would lose work by stepping aside |
+| `max_active_jobs` | `0` (no limit) | at most this many jobs on the GPU at once; the rest wait their turn in queue order (qBittorrent's "Max active torrents"). A job higher in the queue that could start pushes the active job lowest in the queue aside, unless that job would lose work by stepping aside. A job paused by hand doesn't count |
 | `lossy_p_min` | `0.5` | a job that loses work starts in a quiet spell only when it's at least this likely to last until its next saved point |
 | `cold_start_after_s` | `120.0` | until 20 quiet spells are learned, jobs wait for this much quiet |
 | `park_only_if_work` | `true` | put a service to sleep only when a job can use the time |
@@ -98,7 +98,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `park_s`, `resume_s`, `timeout_s` | `5.0`, `5.0`, `120` | first guesses for step-aside and come-back time; how long a step-aside may take |
 | `fallback` | none | `"restart"`: if CPU memory is too short to sleep, stop it instead (needs `start_cmd`) |
 | `max_hours` | none | step aside and wind down after this many hours of running |
-| `[running]`, `[parked]` | | memory per tier (`hbm_gib`, `cpu_gib`, `ssd_gib`); `ssd_paths` lets Measure fill in disk use |
+| `[running]`, `[parked]` | | memory per tier (`hbm_gib`, `cpu_gib`, `ssd_gib`); `ssd_paths` lets Measure fill in disk use. GapRunner also measures the host memory each park takes and uses it when it is larger than `parked.cpu_gib - running.cpu_gib` |
 | `progress_cmd` | none | prints progress (`12/50`, `24%`, `0.24`); an optional second line is the part in progress |
 | `saved_cmd` | none | prints the last saved point; Wind down stops the job when it changes, and GapRunner learns how long a job that loses work runs between saved points |
 | `loses_work` | `true` for `restart`, else `false` | stepping aside throws away the work since the last saved point (see [Jobs that lose work](RECIPES.md#jobs-that-lose-work-when-they-step-aside)) |

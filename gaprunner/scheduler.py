@@ -62,6 +62,7 @@ class Job:
     run_cpu_gib: float = 0.0       # extra CPU memory it takes when it starts or resumes
     save_s: float = 0.0            # loses unsaved work when it steps aside: running time to its next saved point
     loses_work: bool = False       # stepping aside throws away work since its last saved point (restart jobs)
+    frozen: bool = False           # paused by hand where it is: keeps its GPU memory but not a max_active_jobs slot
 
 
 @dataclass
@@ -112,8 +113,9 @@ def committed_gib(snap):
 
 
 def active_jobs(snap):
-    """Jobs on the GPU or coming onto it: what policy.max_active_jobs counts."""
-    return [j for j in snap.jobs if j.state in (HOT, RESUMING)]
+    """Jobs on the GPU or coming onto it: what policy.max_active_jobs counts. A job paused by hand isn't active (as in
+    qBittorrent, a paused torrent doesn't count toward the limit); its GPU memory is still counted wherever memory is."""
+    return [j for j in snap.jobs if j.state in (HOT, RESUMING) and not j.frozen]
 
 
 def idle_elapsed(snap):

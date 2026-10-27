@@ -1142,8 +1142,8 @@ function drawer(n, j, q) {
     </div>
     <div>
       <dl>
-        <dt>GPU memory</dt><dd>${gib(S.holders[n] || 0)} now <span class="faint">(expects ${gib(run.hbm_gib)} running, ${gib(park.hbm_gib)} stepped aside)</span></dd>
-        <dt>CPU memory</dt><dd>${j.cpu_gib_now != null ? gib(j.cpu_gib_now) + ' now ' : ''}<span class="faint">(expects ${gib(run.cpu_gib)})</span></dd>
+        <dt>GPU memory</dt><dd>${gib(S.holders[n] || 0)} now <span class="faint">(expects ${gib(run.hbm_gib)} running, ${gib(park.hbm_gib)} stepped aside)</span>${peakHtml(j, run)}</dd>
+        <dt>CPU memory</dt><dd>${j.cpu_gib_now != null ? gib(j.cpu_gib_now) + ' now ' : ''}<span class="faint">(expects ${gib(run.cpu_gib)})</span>${j.host_park_gib != null ? `<br>Stepping aside takes ${gib(j.host_park_gib)} of host memory <span class="faint">(measured; the recipe says ${gib(Math.max(0, (park.cpu_gib || 0) - (run.cpu_gib || 0)))})</span>` : ''}</dd>
         <dt>Disk</dt><dd>${gib(run.ssd_gib)}</dd>
         ${engineRows(j)}
         <dt>Step aside</dt><dd>${cost('park')}</dd>
@@ -1495,6 +1495,14 @@ function renderPane() {
   }
   if (PTAB !== 'log') { body.dataset.for = n + PTAB; body.scrollTop = keep; }
 }
+function peakHtml(j, run) {
+  // the GPU peak GapRunner measured per run, beside the recipe's figure; a recipe that understates it is called out
+  const peak = j.gpu_peak_gib != null ? j.gpu_peak_gib : j.gpu_peak_now;
+  if (peak == null) return '';
+  const want = run.hbm_gib || 0, over = want && peak > want * 1.1;
+  return `<br>${over ? '<span style="color:var(--warn-ink)">' : ''}Peaks at ${gib(peak)}${j.gpu_peak_gib != null ? ' per run' : ' this run'}${over ? `, more than the recipe's ${gib(want)}: update running.hbm_gib</span>` : ''}`;
+}
+
 function summaryHtml(j) {
   // the job's own highlights (summary_cmd), e.g. the best results so far
   return j && j.summary && j.summary.length ? `<div class="sumbox" aria-label="Highlights"><pre class="mono">${esc(j.summary.join('\n'))}</pre></div>` : '';
