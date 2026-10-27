@@ -274,20 +274,22 @@ class Governor:
         src = resources.files("gaprunner").joinpath("governor_client")
         for name in CLIENT_FILES:
             dst = os.path.join(self.folder, name)
+            tmp = f"{dst}.{os.getpid()}.tmp"
             with resources.as_file(src.joinpath(name)) as f:
-                shutil.copyfile(f, dst + ".tmp")
-            os.chmod(dst + ".tmp", 0o644)
-            os.replace(dst + ".tmp", dst)
+                shutil.copyfile(f, tmp)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, dst)
         self.write_reservations()
 
     def write_reservations(self):
         path = os.path.join(self.state_dir, "reservations.json")
         with self.lock:                       # read and write under one lock: a slower writer never puts back old rows
             rows = [row for j in self.by_owner.values() for row in j.reservations()]
-            with open(path + ".tmp", "w") as f:
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"     # never another writer's temporary file
+            with open(tmp, "w") as f:
                 json.dump({"reservations": rows, "t": round(time.time(), 1)}, f)
-            os.chmod(path + ".tmp", 0o644)
-            os.replace(path + ".tmp", path)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
 
     def start(self):
         self.install()
