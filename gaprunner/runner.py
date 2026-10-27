@@ -945,7 +945,7 @@ class Runner:
             if e["stopped"]:
                 e["state"] = STOPPED
             elif e["starting_since"] is not None:
-                e["state"] = HOT if e["driver"].state() == HOT else STARTING
+                e["state"] = STARTING         # _windows() makes it HOT once ready; until then decide() must not park it
             else:
                 e["state"] = e["driver"].state()
         for n, e in self.job.items():

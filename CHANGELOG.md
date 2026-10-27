@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.1
+
+- A service started at the end of a window (or restarted after a failed wake) is no longer put to sleep for being idle
+  before GapRunner has seen it ready. Seen on a GB300 twice in one day: prod came up with no requests, was parked in
+  the same tick it first answered and never marked ready, so the gate answered 503 "starting again" to every request
+  until GapRunner was restarted or `ready_timeout_s` ran out.
+
 ## 0.26.0
 
 - Jobs API: other programs put jobs into the queue. The operator writes `[[template]]` entries (job recipes with
