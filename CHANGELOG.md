@@ -9,6 +9,10 @@
   as `GAPRUNNER_PARAM_<NAME>`) and queues the job; `GET /api/jobs`, `GET /api/jobs/<id>` and `DELETE /api/jobs/<id>`
   follow it and withdraw it; `GET /api/templates` lists what a token may use. Submitted jobs survive a restart.
   `gaprunner token` makes a token and its hash. See docs/JOBS-API.md.
+- A governor job's request that can't be admitted soon (wound down, turned off, window-only with no window open, the
+  kill switch or Wind down all on) is turned down at once with the reason, instead of waiting `admit_wait_s`.
+  `/api/status` shows `admits_now` and `not_now` for each governor job; `examples/wass_worker_sync.py` uses them to
+  keep a machine in Imagination Studio's worker list only while GapRunner would admit its renderer.
 
 ## 0.25.0
 

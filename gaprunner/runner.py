@@ -1262,6 +1262,10 @@ class Runner:
                                    "started_t": round(e["active_since"], 1) if e["state"] == HOT and e.get("active_since") else None,
                                    "waiting_s": None if e["waiting_since"] is None else round(now - e["waiting_since"], 1),
                                    "word": why[j.name][0], "why": why[j.name][1]}
+        if self.governor is not None:
+            for j in self.governor.by_owner.values():   # whether its app would be admitted now, and if not, why
+                not_now = self.governor._not_now(j)
+                out["jobs"][j.spec["name"]].update(admits_now=not_now is None, not_now=not_now)
         order = sorted(out["jobs"].items(), key=lambda kv: kv[1]["order"])
         nxt = next(((n, j) for n, j in order if j["word"] in ("next", "waiting")), None)
         out["next"] = {"name": nxt[0], "word": nxt[1]["word"], "why": nxt[1]["why"]} if nxt else None

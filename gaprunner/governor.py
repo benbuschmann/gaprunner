@@ -424,6 +424,13 @@ class Governor:
         if job is None:
             conn.sendall((json.dumps({"allowed": False, "reason": f"no GapRunner job asks for owner {msg.get('owner')!r}"}) + "\n").encode())
             return None
+        not_now = self._not_now(job)
+        if not_now:
+            # it would only wait out admit_wait_s: say so now, so the app can render elsewhere at once
+            job.refused_at = time.time()
+            conn.sendall((json.dumps({"allowed": False, "reason": f"not now: {not_now}"}) + "\n").encode())
+            self.runner.audit("governor_refuse", target=job.spec["name"], reason=not_now, pid=msg.get("pid"))
+            return None
         r, why = job.ask(msg, conn, peer)
         if r is None:
             conn.sendall((json.dumps({"allowed": False, "reason": why}) + "\n").encode())
@@ -444,6 +451,24 @@ class Governor:
                               note="shadow mode: admitted at once; live mode would queue it in its place")
         except D.DriverError as e:
             self.runner.audit("governor_shadow_grant_failed", target=job.spec["name"], error=str(e)[:200])
+
+    def _not_now(self, job):
+        """Why a request for this job can't be admitted any time soon (wound down, turned off, window-only with no
+        window open, the kill switch on, winding everything down), or None. Live mode only."""
+        if not self.runner.live:
+            return None
+        from .scheduler import eligible
+        name = job.spec["name"]
+        if self.runner.paused():
+            return "GapRunner's kill switch is on"
+        if os.path.exists(self.runner.drain_path):
+            return "GapRunner is winding everything down"
+        snap = self.runner.snapshot()
+        j = next((x for x in snap.jobs if x.name == name), None)
+        if j is None:
+            return None
+        ok, why = eligible(snap, j, self.runner.policy)
+        return None if ok else {"held": "the job is wound down", "disabled": "the job is turned off"}.get(why, why)
 
     def _rebind(self, msg, conn, peer):
         job = self.by_owner.get(msg.get("owner"))

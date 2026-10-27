@@ -24,6 +24,16 @@ class StubRunner:
     def __init__(self, folder, live=True):
         self.top = {"governor_dir": folder, "governor_uids": [], "state_dir": folder}
         self.live, self.gpu, self.events, self.parked, self.closed = live, FakeGpu(100.0), [], [], []
+        self.policy, self.drain_path = POL, os.path.join(folder, "DRAIN")
+        self.window_only, self.window_open, self.hold = False, False, False
+
+    def paused(self):
+        return False
+
+    def snapshot(self):
+        from gaprunner.scheduler import Job, Snapshot
+        j = Job("WASS video", IDLE, 70, 1, 1, 0, hold=self.hold, window_only=self.window_only)
+        return Snapshot(1000, [], [j], 100, window_open=self.window_open)
 
     def audit(self, event, **kw):
         self.events.append((event, kw))
@@ -194,6 +204,24 @@ class GovernorProtocolTest(unittest.TestCase):
         self.assertIn("did not make room", p.stderr.read())
         self.assertEqual(self.job.state(), IDLE)
         self.assertFalse(self.rpc({"op": "status", "owner": "studio-comfy"})["allowed"])   # don't ask again at once
+
+    def test_a_request_that_cannot_run_soon_is_turned_down_at_once(self):
+        self.runner.window_only = True                                    # window-only, and no window is open
+        t0 = time.monotonic()
+        p = self.launch("true")
+        self.assertEqual(p.wait(10), 3)
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertIn("not now: windows only", p.stderr.read())
+        self.assertFalse(self.rpc({"op": "status", "owner": "studio-comfy"})["allowed"])
+        self.runner.window_only, self.runner.hold = False, True          # wound down
+        p = self.launch("true")
+        self.assertEqual(p.wait(10), 3)
+        self.assertIn("wound down", p.stderr.read())
+        self.runner.hold, self.runner.window_open, self.runner.window_only = False, True, True
+        p = self.launch("sleep", "0.2")                                  # a window is open: it waits in the queue
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        self.assertEqual(p.wait(10), 0)
 
     def test_unknown_owner(self):
         p = self.launch("true", owner="nobody")

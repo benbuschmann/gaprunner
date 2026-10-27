@@ -212,6 +212,12 @@ its status, and the GPU and host memory the app's processes held at the peak. A 
 took from the grant to its server's first answer. You need these numbers before letting such an app use short quiet
 spells: how much memory each kind of work takes, and how long it runs.
 
+**Not now.** A request GapRunner can't admit any time soon is turned down at once instead of waiting
+`admit_wait_s`: when the job is wound down or turned off, window-only with no window open, or the kill switch or Wind
+down all is on. `/api/status` shows this for each governor job as `admits_now` and, when false, `not_now` (the
+reason). An app that hands work to several machines can use it to skip this one meanwhile;
+[examples/wass_worker_sync.py](../examples/wass_worker_sync.py) does that for Imagination Studio's worker list.
+
 **In shadow mode** a request is admitted at once, and the work is still recorded.
 
 **Who may ask.** GapRunner's own user, plus the uids in `governor_uids` (checked with `SO_PEERCRED`). The folder must
