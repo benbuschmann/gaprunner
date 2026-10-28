@@ -52,7 +52,7 @@ ssd_gib = 18
 
 ## Goal and progress
 
-`goal` is a sentence for the people (and agents) deciding the queue order. `progress_cmd` runs in `workdir` every 30 seconds and prints how far along the job is: `12/50`, `24%` or `0.24`, with any words around it. An optional second line is the part in progress, shown as a second, smaller bar: for a training job, line 1 `6/50 steps` and line 2 `rollouts 18/32` (or `eval 12/40`). GapRunner shows a progress bar and, from the progress per hour of *running* time, an estimate of the GPU-hours left. Calibration samples progress too, so a newly calibrated recipe says roughly how many GPU-hours the whole job needs.
+`goal` is a sentence for the people (and agents) deciding the queue order. `progress_cmd` runs in `workdir` every 30 seconds (`progress_every_s` changes that, down to 1 s) and prints how far along the job is: `12/50`, `24%` or `0.24`, with any words around it. An optional second line is the part in progress, shown as a second, smaller bar: for a training job, line 1 `6/50 steps` and line 2 `rollouts 18/32` (or `eval 12/40`). GapRunner shows a progress bar and, from the progress per hour of *running* time, an estimate of the GPU-hours left. Calibration samples progress too, so a newly calibrated recipe says roughly how many GPU-hours the whole job needs.
 
 ## Wind down at a saved point
 
@@ -197,6 +197,8 @@ comfy_url = "http://127.0.0.1:8190"             # optional: record each render, 
 idle_release_s = 600                            # with comfy_url: revoke after this long with nothing to render
 admit_wait_s = 300                              # a request not admitted by then is refused (the app can render elsewhere)
 grace_s = 30                                    # after a revoke: SIGTERM, then SIGKILL after this long
+progress_cmd = "cat /var/tmp/app-progress.txt 2>/dev/null"   # optional: the clip in progress, written by the app
+progress_every_s = 2                            # read it every 2 s: one clip takes seconds to minutes
 ```
 
 On the app's side, set `SPARK_GOVERNOR=/var/tmp/gaprunner-governor` in the environment its renderer starts in.
@@ -211,6 +213,23 @@ its sizes, lengths and steps (`width`, `height`, `length`, `steps`, ...), the mo
 its status, and the GPU and host memory the app's processes held at the peak. A `ready` row records how long the app
 took from the grant to its server's first answer. You need these numbers before letting such an app use short quiet
 spells: how much memory each kind of work takes, and how long it runs.
+
+**Progress.** A governor job's `progress_cmd` works as for any job. An app that renders one clip at a time can
+keep a small file at two lines, the clip's steps and the engine on the first and what it is doing on the second:
+
+```
+3/8 passes · FastH3 bf16 (ComfyUI) · 864x480 124f
+decoding the video · 21 s
+```
+
+With `progress_every_s` set to a few seconds, the job's bar follows each clip. Write the file whole each time (a
+temporary file, then a rename) so a read never sees half of it.
+
+**An app server that isn't ComfyUI.** The idle release and the per-prompt rows read ComfyUI's `/queue` at
+`comfy_url`. An app that runs a different server inside its reservation (for example an OpenAI-style video server)
+can answer `GET /queue` on that address itself, with `{"queue_running": [[0, "<id>"]], "queue_pending": []}` while
+it works and empty lists when it doesn't. Without that, GapRunner sees no work and releases the reservation
+`idle_release_s` after the grant, even mid-batch.
 
 **Not now.** A request GapRunner can't admit any time soon is turned down at once instead of waiting
 `admit_wait_s`: when the job is wound down or turned off, window-only with no window open, or the kill switch or Wind
