@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.3
+
+More fixes from a second, independent review of the Jobs API and governor jobs:
+
+- A template slot right after a backslash (`\\{{x}}`), glued to `$`, or in a command given by path (`/bin/sh -c`) is
+  refused. The backslash case let a value run commands.
+- `NaN` and `Infinity` are refused in Jobs API bodies, and `gpu_gib` must be finite. A `NaN` passed every limit, was
+  stored, and made `/api/status` unreadable for the page.
+- Withdrawing a job holds the scheduler's lock throughout, so a job that starts at that moment is stopped, not lost.
+- Governor jobs: a grant no longer waits for the app under the scheduler's lock (an admitted app could hold up a
+  service's wake for up to 120 s); an app that doesn't bind its command within `bind_timeout_s` (30) is revoked. The
+  token is saved before the app hears it, and a launcher whose reservation a restarted GapRunner doesn't know stops
+  its command. The command gets SIGTERM from the kernel if its launcher dies, so it never outlives the one process
+  GapRunner can reach it through. A prompt cut off by a revoke is recorded as `interrupted`.
+
 ## 0.26.2
 
 Security fixes for the Jobs API and governor jobs, from an end-to-end test and a review:

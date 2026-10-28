@@ -139,11 +139,11 @@ class Runner:
 
     def remove_job(self, name):
         """Take a job out (the Jobs API's withdraw): stopped first if it holds anything, then forgotten."""
-        if name not in self.job:
-            raise ValueError("no such job")
-        if self.job[name]["driver"].pids():
-            self.stop_job(name)
-        with self.lock:
+        with self.lock:                       # held throughout, so the scheduler can't start it in between
+            if name not in self.job:
+                raise ValueError("no such job")
+            if self.job[name]["driver"].pids() or self.job[name]["proc"] is not None:
+                self.stop_job(name)
             self.job.pop(name, None)
             self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
             q = C.read_queue(self.top)

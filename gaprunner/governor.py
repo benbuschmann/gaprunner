@@ -99,22 +99,40 @@ class GovernorJob(D.Driver):
         return D._cached(("governor", r.token), lambda: PB.session(r.binding))
 
     def resume(self):
-        """Admit the waiting request: answer it with a token, then wait for the app to start its command."""
+        """Admit the waiting request: save its token, then answer it. Returns at once; the app binds its command
+        within bind_timeout_s or the reservation is revoked (Governor.tick), so no lock is held while it starts."""
         with self.lock:
             r = self.req
             if r is None or r.granted.is_set():
                 raise D.DriverError(f"{self.spec['name']}: nothing is waiting for a reservation")
             r.granted_at = time.time()
             r.granted.set()
+        self.on_change()                      # the token is on disk before the app hears it, so a restart can adopt it
         try:
             r.send({"allowed": True, "token": r.token, "grace_s": float(self.spec.get("grace_s", 30))})
             r.answered = True
         except OSError as e:
             self._drop(r, "the app went away before it was admitted")
             raise D.DriverError(f"{self.spec['name']}: the app went away before it was admitted ({e})") from None
-        if not r.bound.wait(self.timeout):
-            raise D.DriverError(f"{self.spec['name']}: the app was admitted but did not start within {self.timeout:.0f}s")
         self._event("grant", wait_s=round(r.granted_at - r.asked_at, 1))
+
+    def unbound_for(self):
+        """Seconds since a grant that the app has not bound to a command yet, or None."""
+        with self.lock:
+            r = self.req
+            if r is None or not r.granted.is_set() or r.binding is not None or r.revoked_at is not None:
+                return None
+            return time.time() - r.granted_at
+
+    def expire_unbound(self):
+        with self.lock:
+            r = self.req
+        try:
+            r.send({"op": "revoke", "grace_s": float(self.spec.get("grace_s", 30))})
+        except OSError:
+            pass
+        self._event("revoke", note="admitted but never bound a command")
+        self._drop(r, None)
 
     def park(self):
         """Revoke the reservation: the app's command is stopped; whatever it was doing is lost."""
@@ -389,6 +407,9 @@ class Governor:
             if self.was_hot.get(name) and not hot:
                 self.runner._close_gpu_peak(name)
             self.was_hot[name] = hot
+            unbound = j.unbound_for()
+            if unbound is not None and unbound > float(j.spec.get("bind_timeout_s", 30)):
+                j.expire_unbound()
             idle_release = float(j.spec.get("idle_release_s", 600) or 0)
             rec = self.recorders.get(name)
             if hot and idle_release and rec is not None and self.runner.live:
@@ -616,6 +637,8 @@ class Recorder:
             token = r.token if r is not None and r.granted.is_set() else None
             granted_at = r.granted_at if token else None
         if token != self.token:              # a new reservation (or none): start over
+            if self.current is not None:      # the reservation ended mid-prompt (a revoke): record what there was
+                self.finish(self.current, interrupted=True)
             self.token, self.current, self.ready_at = token, None, None
             self.last_busy = granted_at
         if token is None:
@@ -645,9 +668,12 @@ class Recorder:
             self.current["gpu"] = max(self.current["gpu"], gpu)
             self.current["host"] = max(self.current["host"], host)
 
-    def finish(self, cur):
+    def finish(self, cur, interrupted=False):
         row = {"event": "prompt", "prompt_id": cur["id"], "seconds": round(time.time() - cur["t0"], 1),
                "gpu_peak_gib": cur["gpu"], "host_peak_gib": cur["host"]}
+        if interrupted:
+            self.write({**row, "status": "interrupted", "note": "its reservation ended while it ran"})
+            return
         try:
             h = self._get(f"/history/{cur['id']}").get(cur["id"], {})
             row.update(shape_of((h.get("prompt") or [None, None, {}])[2]))

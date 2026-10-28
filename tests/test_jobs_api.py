@@ -54,7 +54,10 @@ class TemplateConfigTest(unittest.TestCase):
                     {**t, "progress_cmd": 'sh -c "tail {{note}}"'},
                     {**t, "start_cmd": "python3 - <<EOF\nprint({{note}})\nEOF"},  # a here-document reads it as code
                     {**t, "start_cmd": "bash -c run {{note}}"}, {**t, "start_cmd": "eval run {{note}}"},
-                    {**t, "start_cmd": "ssh host run {{note}}"}, {**t, "start_cmd": "echo {{note}} | xargs rm"}):
+                    {**t, "start_cmd": "ssh host run {{note}}"}, {**t, "start_cmd": "echo {{note}} | xargs rm"},
+                    {**t, "start_cmd": "printf %s \\{{note}}"},             # an escaped slot (a reviewer's attack)
+                    {**t, "start_cmd": "/bin/sh -c run {{note}}"},          # an interpreter given by path
+                    {**t, "start_cmd": "echo $'{{note}}'"}, {**t, "start_cmd": "echo ${{note}}"}):
             with self.assertRaises(C.ConfigError, msg=str(bad)[:80]):
                 self.parse([bad, TEMPLATES[1]], [])
         for bad in ({**CLIENTS[0], "token_sha256": "abc"}, {**CLIENTS[0], "templates": ["nope"]},
@@ -183,6 +186,17 @@ class JobsApiTest(unittest.TestCase):
         self.assertEqual((c1, c2), (201, 201))
         from gaprunner.runner import _slug
         self.assertNotEqual(_slug(o1["job"]["name"]), _slug(o2["job"]["name"]))
+
+    def test_nan_and_infinity_are_refused(self):
+        import socket
+        for raw in (b'{"template": "eval", "params": {"model": "m"}, "gpu_gib": NaN}',
+                    b'{"template": "eval", "params": {"model": "m"}, "gpu_gib": Infinity}'):
+            s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            s.sendall(b"POST /api/jobs HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer " + TOKEN.encode() +
+                      b"\r\nContent-Length: " + str(len(raw)).encode() + b"\r\n\r\n" + raw)
+            self.assertIn(b" 400 ", s.recv(300))
+            s.close()
+        self.assertEqual(self.call("GET", "/api/jobs")[1]["jobs"], [])
 
     def test_bad_lengths(self):
         import socket

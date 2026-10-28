@@ -442,10 +442,11 @@ def make_handler(runner):
                 size, bad = self._length(MAX_BODY)
                 if bad:
                     return self._send(bad[0], {"ok": False, "error": bad[1]})
+                from .jobsapi import strict_json
                 try:
-                    body = json.loads(self.rfile.read(size) or b"{}")
-                except ValueError:
-                    return self._send(400, {"ok": False, "error": "bad json"})
+                    body = strict_json(self.rfile.read(size) or b"{}")
+                except ValueError as e:
+                    return self._send(400, {"ok": False, "error": f"bad json: {e}"})
                 return self._jobs_api("POST", path, body)
             if path != "/api/action":
                 return self._send(404, {"error": "not found"})

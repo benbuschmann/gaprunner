@@ -45,7 +45,8 @@ default = 50
   in the job's environment as `GAPRUNNER_PARAM_<NAME>`.
 - **In commands a slot must be a word of its own.** GapRunner shell-quotes the value, so `x'; rm -rf ~` arrives as one
   literal argument, but that only holds where the shell reads the value once. GapRunner refuses a template that puts
-  a slot inside quotes (`"…{{x}}…"`), or in a command that reads its arguments as code again: a here-document (`<<`),
+  a slot inside quotes (`"…{{x}}…"`), after a backslash or `$`, or in a command (also when given by path, like
+  `/bin/sh -c`) that reads its arguments as code again: a here-document (`<<`),
   `eval`, `sh -c` / `bash -c`, `python -c` or a script on stdin, `ssh`, `su -c`, `xargs`, `parallel`, `watch`,
   `trap`, `source`. Inside such commands use the variables (`"$GAPRUNNER_PARAM_X"`), which a shell expands without
   running them. `timeout`, `env`, `nohup`, `sudo` and running a script file with arguments are fine.

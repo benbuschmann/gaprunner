@@ -91,7 +91,7 @@ def parse_templates(raw, error):
                 if field in QUOTED and SLOT.search(text):
                     quoted = _quoted_slot(text)
                     if quoted:
-                        raise error(f"template {name}: {field}: {{{{{quoted}}}}} is inside quotes; write it as a word of its "
+                        raise error(f"template {name}: {field}: {{{{{quoted}}}}} is inside quotes or escaped; write it as a word of its "
                                     f"own (GapRunner quotes the value) or use $GAPRUNNER_PARAM_{quoted.upper()}")
                     again = _reparsed(text)
                     if again:
@@ -160,6 +160,9 @@ def _quoted_slot(cmd):
     while i < len(cmd):
         c = cmd[i]
         if c == "\\" and not single:
+            m = SLOT.match(cmd, i + 1)
+            if m:
+                return m.group(1)              # \{{x}}: the backslash would eat the quote GapRunner adds
             i += 2
             continue
         if c == "'" and not double:
@@ -169,15 +172,15 @@ def _quoted_slot(cmd):
         elif cmd.startswith("{{", i):
             m = SLOT.match(cmd, i)
             if m:
-                if single or double:
-                    return m.group(1)
+                if single or double or (i > 0 and cmd[i - 1] in "\\$"):
+                    return m.group(1)              # quoted, escaped (\{{x}}) or glued to $ ($'..', ${..})
                 i = m.end()
                 continue
         i += 1
     return None
 
 
-REPARSE = re.compile(r"<<|(^|[\s;&|(`])(eval|ssh|xargs|parallel|source|su|trap|watch|"
+REPARSE = re.compile(r"<<|(^|[\s;&|(`])(?:[\w.+-]*/)*(eval|ssh|xargs|parallel|source|su|trap|watch|"
                      r"(ba|z|da|k|fi)?sh|python3?|perl|ruby|node)(?=[\s;&|)`]|$)")
 
 
@@ -297,6 +300,13 @@ def _text(v):
     return ("true" if v else "false") if isinstance(v, bool) else str(v)
 
 
+def strict_json(raw):
+    """JSON without NaN or Infinity (Python's reader accepts them; browsers and comparisons don't)."""
+    def refuse(c):
+        raise ValueError(f"{c} is not a number")
+    return json.loads(raw, parse_constant=refuse)
+
+
 def token_pair():
     token = "grt_" + uuid.uuid4().hex + uuid.uuid4().hex
     return token, hashlib.sha256(token.encode()).hexdigest()
@@ -375,9 +385,11 @@ class Submissions:
             raise SubmitError(403, f"this token may not use template {t['name']!r}")
         values = validate_params(t, body.get("params", {}))
         gpu = body.get("gpu_gib", _gpu(t))
+        if isinstance(gpu, float) and not math.isfinite(gpu):
+            raise SubmitError(400, "gpu_gib: a finite number")
         if isinstance(gpu, (int, float)) and not isinstance(gpu, bool) and gpu < _gpu(t):
             raise SubmitError(400, f"gpu_gib: at least {_gpu(t):g} for {t['name']} (what its recipe takes)")
-        if isinstance(gpu, bool) or not isinstance(gpu, (int, float)) or gpu <= 0:
+        if isinstance(gpu, bool) or not isinstance(gpu, (int, float)) or not math.isfinite(gpu) or gpu <= 0:
             raise SubmitError(400, "gpu_gib: a positive number")
         cap = min(t["max_gpu_gib"], client["max_gpu_gib"] if client["max_gpu_gib"] is not None else math.inf)
         if gpu > cap:

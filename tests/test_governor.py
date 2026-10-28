@@ -152,6 +152,7 @@ class GovernorProtocolTest(unittest.TestCase):
         self.assertEqual(self.rows(), [])
         self.job.resume()                                                    # the scheduler admits it
         self.assertEqual(self.job.state(), HOT)
+        self.assertTrue(wait_for(lambda: self.rows() and self.rows()[0].get("binding")))
         row = self.rows()[0]
         self.assertEqual(row["owner"], "studio-comfy")
         self.assertTrue(self.job.pids())
@@ -170,7 +171,7 @@ class GovernorProtocolTest(unittest.TestCase):
         p = self.launch("sleep", "60")
         self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
         self.job.resume()
-        self.assertEqual(self.job.state(), HOT)
+        self.assertTrue(wait_for(lambda: self.job.req is not None and self.job.req.binding is not None))
         t0 = time.monotonic()
         self.job.park()
         self.assertLess(time.monotonic() - t0, 5)
@@ -183,6 +184,7 @@ class GovernorProtocolTest(unittest.TestCase):
         p = self.launch("sh", "-c", f"trap '' TERM; touch {ready}; sleep 60")
         self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
         self.job.resume()
+        self.assertTrue(wait_for(lambda: self.job.req is not None and self.job.req.binding is not None))
         self.assertTrue(wait_for(lambda: os.path.exists(ready)))      # it ignores SIGTERM from here on
         t0 = time.monotonic()
         self.job.park()
@@ -242,14 +244,61 @@ class GovernorProtocolTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             GV.Governor(r, [GV.GovernorJob(spec())]).install()
 
+    def test_grant_returns_at_once_and_an_unbound_grant_expires(self):
+        import socket as so
+        c = so.socket(so.AF_UNIX)
+        c.connect(self.gov.sock_path)
+        c.sendall(b'{"op": "reserve", "owner": "studio-comfy"}\n')       # asks, and never binds a command
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.spec["bind_timeout_s"] = 0.3
+        t0 = time.monotonic()
+        self.job.resume()
+        self.assertLess(time.monotonic() - t0, 1.0)                      # no waiting under the scheduler's lock
+        f = c.makefile("r")
+        self.assertTrue(json.loads(f.readline())["allowed"])
+        time.sleep(0.4)
+        self.gov.tick()
+        self.assertEqual(json.loads(f.readline())["op"], "revoke")
+        self.assertEqual(self.job.state(), IDLE)
+        c.close()
+
+    def test_the_command_dies_with_its_launcher(self):
+        p = self.launch("sleep", "60")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        self.assertTrue(wait_for(lambda: self.job.pids()))
+        p.kill()                                                         # SIGKILL: no clean-up in the launcher
+        p.wait()
+        self.assertTrue(wait_for(lambda: self.job.state() == IDLE, 10))  # the kernel stopped the command too
+
+    def test_a_restart_that_doesnt_know_the_token_stops_the_command(self):
+        p = self.launch("sleep", "60")
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.resume()
+        self.assertTrue(wait_for(lambda: self.job.req is not None and self.job.req.binding is not None))
+        self.gov.stop()
+        os.remove(self.gov.tokens_path)                                  # a GapRunner that never issued it
+        job2 = GV.GovernorJob(spec())
+        gov2 = GV.Governor(self.runner, [job2])
+        gov2.start()
+        try:
+            self.assertNotEqual(p.wait(15), 0)                           # the launcher stopped its command
+            self.assertEqual(job2.state(), IDLE)
+        finally:
+            gov2.stop()
+
     def test_unknown_owner(self):
         p = self.launch("true", owner="nobody")
         self.assertEqual(p.wait(10), 3)
 
     def test_a_killed_launcher_leaves_the_reservation_until_its_session_ends(self):
-        p = self.launch("sleep", "2")
+        # the command ignores the SIGTERM the kernel sends when its launcher dies: GapRunner keeps counting it
+        ready = os.path.join(self.dir, "trapped2")
+        p = self.launch("sh", "-c", f"trap '' TERM; touch {ready}; sleep 2")
         self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
         self.job.resume()
+        self.assertTrue(wait_for(lambda: os.path.exists(ready)))
+        self.assertTrue(wait_for(lambda: self.job.pids()))
         pids = self.job.pids()
         p.kill()
         p.wait()
@@ -261,6 +310,7 @@ class GovernorProtocolTest(unittest.TestCase):
         p = self.launch("sleep", "30")
         self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
         self.job.resume()
+        self.assertTrue(wait_for(lambda: self.job.req is not None and self.job.req.binding is not None))
         self.gov.stop()                                                      # GapRunner restarts
         job2 = GV.GovernorJob(spec())
         gov2 = GV.Governor(self.runner, [job2])
@@ -339,6 +389,13 @@ class RecorderTest(unittest.TestCase):
         time.sleep(0.4)
         gov.tick()                                                   # idle longer than idle_release_s: revoked
         self.assertEqual(runner.parked[0][0], "WASS video")
+        comfy.running = ["p2"]                                       # a prompt cut off by the end of the reservation
+        rec.poll()
+        j.req = None
+        rec.poll()
+        with open(rec.path) as f:
+            last = [json.loads(x) for x in f][-1]
+        self.assertEqual((last["prompt_id"], last["status"]), ("p2", "interrupted"))
         comfy.server.shutdown()
 
 

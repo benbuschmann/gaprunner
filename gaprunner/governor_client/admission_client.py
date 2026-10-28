@@ -59,6 +59,16 @@ def _say(msg):
     print(f"[gaprunner] {msg}", file=sys.stderr, flush=True)
 
 
+def _die_with_parent():
+    """In the child, before exec (Linux): SIGTERM it when this launcher dies, however it dies, so a command that
+    holds the GPU never outlives the one process GapRunner can reach it through."""
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)          # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
 def _signal_group(pgid, sig):
     try:
         os.killpg(pgid, sig)
@@ -88,7 +98,7 @@ def run(args, command):
     token, grace = answer["token"], float(answer.get("grace_s", 30))
     child = subprocess.Popen(command, env={**os.environ, "SPARK_ADMISSION_TOKEN": token,
                                            "SPARK_WORKLOAD_OWNER": args.owner},
-                             start_new_session=True)
+                             start_new_session=True, preexec_fn=_die_with_parent)
     bound = process_binding.binding(child.pid)
     _send(s, {"op": "bind", "token": token, "binding": bound})
     stop = {"at": None, "grace": grace}
@@ -104,10 +114,16 @@ def run(args, command):
     while child.poll() is None:
         if stop["at"] is not None and time.monotonic() - stop["at"] > stop["grace"]:
             _signal_group(child.pid, signal.SIGKILL)
+        if conn == "refused":                    # GapRunner doesn't know this reservation: the command is stopping
+            time.sleep(0.5)
+            continue
         if conn is None:
             conn = _rebind(args, token, bound)   # GapRunner restarted: tell the new one this session holds the GPU
             if conn is None:
                 time.sleep(1)
+                continue
+            if conn == "refused":                # it doesn't know this reservation: give the GPU back
+                asked_to_stop()
                 continue
             f = conn.makefile("r")
         try:
@@ -129,7 +145,9 @@ def run(args, command):
             _signal_group(bound["sid"], signal.SIGKILL)
         time.sleep(0.5)
     try:
-        if conn is not None:
+        if conn == "refused":
+            pass                                 # nothing to release: GapRunner doesn't hold it
+        elif conn is not None:
             _send(conn, {"op": "release", "token": token})
         else:
             rpc({"op": "release", "owner": args.owner, "token": token}, args.socket)
@@ -145,7 +163,9 @@ def _rebind(args, token, bound):
                   "estimated_incremental_gib": args.estimated_incremental_gib, "pid": os.getpid()})
         answer = _read(s.makefile("r"))
         if not answer.get("allowed"):
-            _say("GapRunner did not take the reservation back: " + str(answer.get("reason")))
+            _say("GapRunner did not take the reservation back (" + str(answer.get("reason")) + "): stopping")
+            s.close()
+            return "refused"
         s.settimeout(None)
         return s
     except (OSError, ValueError, ConnectionError):

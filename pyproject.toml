@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaprunner"
-version = "0.26.2"
+version = "0.26.3"
 description = "Resumable background GPU jobs that yield to your local AI services"
 readme = "README.md"
 license = {text = "Apache-2.0"}
