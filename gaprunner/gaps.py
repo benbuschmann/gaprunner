@@ -71,5 +71,5 @@ class GapModel:
         try:
             with open(path) as f:
                 return cls(json.load(f).get("gaps", []), **kw)
-        except (FileNotFoundError, ValueError):
+        except (FileNotFoundError, ValueError, AttributeError, TypeError):
             return cls(**kw)

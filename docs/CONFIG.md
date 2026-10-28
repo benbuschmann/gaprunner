@@ -17,7 +17,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `verify_free_s` | `30.0` | how long to wait for the driver to show memory free before starting or waking something |
 | `kill_stuck_jobs` | `true` | stop a job hard when it won't step aside in time, so a service can wake |
 | `queue_file` | `<state_dir>/queue.json` | job order and the page's changes (Start/Wind down, Queue, tags, ...) |
-| `window_file` | `<state_dir>/WINDOW` | the page's slow-wake / no-service period: present while open (JSON `{"until", "exclusive"}`) |
+| `window_file` | `<state_dir>/WINDOW` | the page's slow-wake / no-service period: present while open (JSON `{"until": epoch seconds or 0 for open-ended, "exclusive": true/false}`; a file of another shape counts as no window and is logged once as `window_file_ignored`) |
 | `windows` | `[]` | daily slow-wake periods, local time, e.g. `["01:00-06:00"]` |
 | `pause_file` | `<state_dir>/PAUSE` | the kill switch: while it exists, services stay awake and every job steps aside |
 | `ui_listen` | none (no page) | the web page's address; keep it on loopback or a private network |

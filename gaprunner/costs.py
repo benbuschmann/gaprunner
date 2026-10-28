@@ -16,7 +16,7 @@ class CostBook:
             try:
                 with open(path) as f:
                     self.samples = {k: list(v)[-keep:] for k, v in json.load(f).get("samples", {}).items()}
-            except (FileNotFoundError, ValueError):
+            except (FileNotFoundError, ValueError, AttributeError, TypeError):
                 pass
 
     @staticmethod

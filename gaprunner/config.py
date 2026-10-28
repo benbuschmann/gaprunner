@@ -256,7 +256,10 @@ def window_file_info(top):
         v = {}
     if isinstance(v, (int, float)):
         v = {"until": v}
-    return {"until": float(v.get("until") or 0), "exclusive": bool(v.get("exclusive"))}
+    try:
+        return {"until": float(v.get("until") or 0), "exclusive": bool(v.get("exclusive"))}
+    except (AttributeError, TypeError, ValueError):
+        return None          # not a window (a list, "until": "06:00"): no window rather than an open-ended one
 
 
 def window_until(top):
@@ -286,9 +289,13 @@ def window_open(top, now=None):
 def read_queue(top):
     try:
         with open(top["queue_file"]) as f:
-            return json.load(f)
+            q = json.load(f)
     except (OSError, ValueError, KeyError, TypeError):
         return {"jobs": []}
+    if not isinstance(q, dict) or not isinstance(q.get("jobs"), list):
+        return {"jobs": []}                       # not a queue GapRunner wrote: no overrides
+    q["jobs"] = [x for x in q["jobs"] if isinstance(x, dict)]
+    return q
 
 
 def write_queue(top, q):

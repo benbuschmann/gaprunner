@@ -270,17 +270,19 @@ class Submissions:
         try:
             with open(self.path) as f:
                 rows = json.load(f).get("jobs", [])
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError):
+            rows = []
+        if not isinstance(rows, list):
             rows = []
         for row in rows:
-            if row.get("client") not in self.clients:
-                self.runner.audit("job_submission_dropped", target=row.get("name"),
-                                  error=f"client {row.get('client')!r} is no longer in the config")
-                continue
-            if row.get("name") in self.runner.job:
-                self.rows.append(row)             # already known (a runner built from a config that holds it)
-                continue
             try:
+                if not isinstance(row, dict):
+                    raise ValueError("not a stored submission")
+                if row.get("client") not in self.clients:
+                    raise ValueError(f"client {row.get('client')!r} is no longer in the config")
+                if row.get("name") in self.runner.job:
+                    self.rows.append(row)         # already known (a runner built from a config that holds it)
+                    continue
                 # rebuilt from the current template and the stored values, never run as stored: a job saved by an
                 # older GapRunner (or under a template since corrected) must not bring its old commands back
                 t = self.templates.get(row.get("template"))
@@ -300,7 +302,8 @@ class Submissions:
                 self.runner.add_job(spec)
                 self.rows.append(row)
             except Exception as e:  # noqa: BLE001 -- a bad row must not stop GapRunner from starting (SubmitError too)
-                self.runner.audit("job_submission_dropped", target=row.get("name"), error=str(e)[:300])
+                self.runner.audit("job_submission_dropped", target=row.get("name") if isinstance(row, dict) else None,
+                                  error=str(e)[:300])
         if len(self.rows) != len(rows):
             self.save()
 

@@ -85,6 +85,7 @@ class Runner:
         self.live_rows = collections.deque(maxlen=720)                                 # 5 s rows, last hour
         self.activity = collections.deque(_tail_jsonl(self.activity_path, self.clock() - 86400))
         self.last_minute = 0
+        self.window_ignored = None            # mtime of a WINDOW file already reported as unreadable
         self.submissions.load()               # jobs submitted through the Jobs API, back in the queue
         if not readonly:
             _trim_jsonl(self.history_path, self.clock() - HISTORY_KEEP_S)
@@ -1011,6 +1012,7 @@ class Runner:
             return []                      # a wake is in progress; it owns the GPU this instant
         try:
             self.refresh()
+            self._check_window_file()
             if self.governor is not None:
                 self.governor.tick()
             snap = self.snapshot()
@@ -1056,6 +1058,16 @@ class Runner:
         self._track_speed()
         health.check(self)
         return acts
+
+    def _check_window_file(self):
+        """A WINDOW file that isn't a window (a hand edit such as {"until": "06:00"}) counts as no window; say so once."""
+        path = self.top["window_file"]
+        if not os.path.exists(path) or C.window_file_info(self.top) is not None:
+            self.window_ignored = None
+        elif self.window_ignored != _mtime(path):
+            self.window_ignored = _mtime(path)
+            self.audit("window_file_ignored", note='WINDOW should hold {"until": epoch seconds or 0, "exclusive": '
+                                                   'true or false}; until it does, no window is open')
 
     def _track_speed(self):
         """Tokens per second for running jobs and services that expose Prometheus counters (speed.py)."""
