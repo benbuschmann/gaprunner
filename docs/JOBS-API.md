@@ -128,9 +128,10 @@ queue.
 
 ## What is kept
 
-Submitted jobs are stored in `<state_dir>/submitted.json` with their template, values and the recipe they were made
-into, so a restart puts them back in the queue as they were, even if the template has changed since. Removing a
-`[[client]]` revokes its jobs too: at the next start they are not put back (the audit log says so). Finished jobs
+Submitted jobs are stored in `<state_dir>/submitted.json` with their template and values. At each start GapRunner
+makes them again from the current template, so a corrected template applies to jobs already in the queue. A job whose
+template is gone, whose values the template no longer accepts, or whose `[[client]]` was removed is not put back (the
+audit log says so). Finished jobs
 stay until withdrawn, and only unfinished ones count toward `max_jobs`. The audit log records `job_submitted` (with
 the client, template and values, long text cut to 200 characters) and `job_withdrawn`.
 

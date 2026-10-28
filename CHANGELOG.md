@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.27.1
+
+- Jobs API: stored submissions are made again from the current template at each start, never run as stored, so a
+  job saved under an older or corrected template can't bring its old commands back. One whose template is gone or
+  whose values no longer pass is dropped.
+- Governor jobs: a grant revoked before the app bound its command stays counted for as long as its launcher stays
+  connected (before, only for `grace_s` + `bind_timeout_s`). A service wake now also takes jobs that are still
+  stepping aside, so its deadline and the hard stop apply to them.
+- A job's processes are still found, stopped and counted after its wrapper exited and left children running.
+
 ## 0.27.0
 
 - **Jobs API templates: values reach commands only as environment variables.** A `{{param}}` slot in a command is

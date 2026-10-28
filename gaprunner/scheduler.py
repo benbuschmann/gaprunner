@@ -309,12 +309,13 @@ def decide(snap, gaps, policy):
 def plan_wake(snap, service=None, reserve_gib=0.0):
     """Jobs to park before waking `service`: every gap job, plus coexisting jobs (lowest priority first) until the
     service fits beside what is left. Without a service name, every job that may hold GPU memory."""
-    on_gpu = [j for j in snap.jobs if j.state in (HOT, RESUMING, UNKNOWN)]
+    # PARKING: a job still stepping aside (a revoked app whose command hasn't ended) gets the wake's deadline too
+    on_gpu = [j for j in snap.jobs if j.state in (HOT, RESUMING, UNKNOWN, PARKING)]
     if service is None:
         return [j.name for j in on_gpu]
     need = next(s.gpu_gib for s in snap.services if s.name == service)
     others = sum(s.gpu_gib for s in snap.services if s.name != service and s.state in (HOT, RESUMING, UNKNOWN))
-    park = [j for j in on_gpu if j.coexist == "no" or j.state == UNKNOWN]
+    park = [j for j in on_gpu if j.coexist == "no" or j.state in (UNKNOWN, PARKING)]
     keep = sorted((j for j in on_gpu if j not in park), key=lambda j: j.order)
     while keep and others + need + sum(j.gpu_gib for j in keep) > snap.gpu_total_gib - reserve_gib:
         park.append(keep.pop())                       # last in the queue goes first

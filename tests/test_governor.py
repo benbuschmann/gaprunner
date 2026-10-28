@@ -85,12 +85,34 @@ class GovernorSchedulingTest(unittest.TestCase):
         self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "train")])
         self.assertEqual(explain(s, LONG, ONE)["wass"][0], "idle")
 
+    def test_a_service_wake_also_takes_a_job_still_stepping_aside(self):
+        from gaprunner.scheduler import plan_wake
+        s = snap(svc_state=PARKED, jobs=[job("wass", state=PARKING, coexist="share", gib=10, order=0)])
+        self.assertEqual(plan_wake(s, "prod"), ["wass"])
+
     def test_a_request_takes_its_place_at_the_top(self):
         # the app asked: the job waits in its place and pushes the training job (lower, keeps its work) aside
         s = snap(svc_state=PARKED, jobs=[job("wass", order=0, loses_work=True), job("train", state=HOT, order=1)])
         acts = decide(s, LONG, ONE)
         self.assertEqual(kinds(acts), [("park_job", "train")])
         self.assertIn("makes room for wass", acts[0].reason)
+
+
+class OrphanedGroupTest(unittest.TestCase):
+    def test_children_are_found_after_the_wrapper_exits(self):
+        from gaprunner import drivers as D
+        p = subprocess.Popen(["sh", "-c", "sleep 30 & echo $!; exit 0"], stdout=subprocess.PIPE, text=True,
+                             start_new_session=True)
+        child = int(p.stdout.readline())
+        p.wait()                                                         # the group leader is gone
+        d = tempfile.mkdtemp()
+        pid_file = os.path.join(d, "job.pid")
+        with open(pid_file, "w") as f:
+            f.write(f"{p.pid}\n")
+        try:
+            self.assertIn(child, D.pids_from({"wrapper_pid_file": pid_file, "pid_file": pid_file, "group": True}))
+        finally:
+            os.kill(child, 9)
 
 
 class LinesTest(unittest.TestCase):
@@ -276,6 +298,10 @@ class GovernorProtocolTest(unittest.TestCase):
         self.gov.tick()
         self.assertEqual(json.loads(f.readline())["op"], "revoke")
         self.assertEqual(self.job.state(), PARKING)                     # not forgotten while it might still start
+        self.job.spec["grace_s"] = 0.01
+        time.sleep(0.2)
+        self.assertEqual(self.job.state(), PARKING)                     # however long its launcher stays connected
+        f.close()
         c.close()
         self.assertTrue(wait_for(lambda: self.job.state() == IDLE))       # its launcher is gone: nothing left
 

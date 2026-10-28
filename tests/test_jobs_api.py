@@ -208,6 +208,18 @@ class JobsApiTest(unittest.TestCase):
         code, out = self.submit(token=OTHER, template="render", params={"prompt": "x"})
         self.assertTrue(self.r.job[out["job"]["name"]]["spec"]["hold"])
 
+    def test_stored_jobs_are_rebuilt_from_the_template(self):
+        mine = self.submit()[1]["job"]
+        path = os.path.join(self.r.top["state_dir"], "submitted.json")
+        rows = json.load(open(path))
+        rows["jobs"][0]["spec"]["start_cmd"] = "touch /tmp/should-not-run"   # as an older version might have stored it
+        json.dump(rows, open(path, "w"))
+        self.stop.set()
+        fresh = C.parse({**BASE, "gaprunner": {"state_dir": self.r.top["state_dir"]}, "template": TEMPLATES, "client": CLIENTS})
+        r2 = Runner(fresh, gpu=self.gpu)
+        self.assertEqual(r2.job[mine["name"]]["spec"]["start_cmd"], fresh["templates"]["eval"]["start_cmd"])
+        self.assertEqual(r2.job[mine["name"]]["spec"]["env"]["GAPRUNNER_PARAM_MODEL"], "qwen")
+
     def test_a_removed_client_s_jobs_do_not_come_back(self):
         self.submit()
         self.stop.set()

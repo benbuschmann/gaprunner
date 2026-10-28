@@ -281,9 +281,19 @@ class Submissions:
                 self.rows.append(row)             # already known (a runner built from a config that holds it)
                 continue
             try:
-                self.runner.add_job(row["spec"])
+                # rebuilt from the current template and the stored values, never run as stored: a job saved by an
+                # older GapRunner (or under a template since corrected) must not bring its old commands back
+                t = self.templates.get(row.get("template"))
+                if t is None:
+                    raise ValueError(f"template {row.get('template')!r} is no longer in the config")
+                old = row.get("spec") or {}
+                spec = render(t, validate_params(t, row.get("params") or {}), row["name"], float(row["gpu_gib"]))
+                spec["hold"] = bool(old.get("hold")) or bool(t.get("hold")) or self.clients[row["client"]]["hold"]
+                spec["tags"] = list(old.get("tags") or [f"via {row['client']}"])
+                row["spec"] = spec
+                self.runner.add_job(spec)
                 self.rows.append(row)
-            except Exception as e:  # noqa: BLE001 -- a bad row must not stop GapRunner from starting
+            except Exception as e:  # noqa: BLE001 -- a bad row must not stop GapRunner from starting (SubmitError too)
                 self.runner.audit("job_submission_dropped", target=row.get("name"), error=str(e)[:300])
         if len(self.rows) != len(rows):
             self.save()

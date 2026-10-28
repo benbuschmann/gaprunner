@@ -98,12 +98,11 @@ class GovernorJob(D.Driver):
 
     def _stepping_aside(self, r):
         """A revoked reservation still holds the GPU while its session lives, and, before the app has bound its
-        command, while the launcher is connected and might still start it (for grace_s plus bind_timeout_s)."""
+        command, for as long as the launcher stays connected (it could still start it)."""
         if self._alive(r):
             return True
         if r.binding is None and not r.closed:
-            limit = float(self.spec.get("grace_s", 30)) + float(self.spec.get("bind_timeout_s", 30))
-            return time.time() - r.revoked_at < limit
+            return True                       # its launcher is still there and could still start the command
         return False
 
     def pids(self):

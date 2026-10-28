@@ -93,6 +93,29 @@ def leaders(spec):
     return []
 
 
+def _orphaned_groups(pid_file):
+    """Process groups whose leader (the wrapper GapRunner started) has exited while members still run. The kernel
+    doesn't give a pid to a new process while it is in use as a group id, so a live member of that group is ours;
+    a pid now taken by an unrelated process (its start time differs) is not."""
+    out = set()
+    try:
+        with open(os.path.expanduser(pid_file)) as f:
+            for line in f:
+                parts = line.split()
+                if not parts or not parts[0].isdigit():
+                    continue
+                pid = int(parts[0])
+                if alive(pid):
+                    continue                      # a live leader is counted by leaders()
+                st = start_time(pid)
+                if st is not None and len(parts) > 1 and parts[1].isdigit() and st != int(parts[1]):
+                    continue                      # reused by another process
+                out.add(pid)
+    except OSError:
+        pass
+    return out
+
+
 def group_members(leader_pids):
     out = set()
     for pg in leader_pids:
@@ -109,9 +132,10 @@ def pids_from(spec):
         # only adds processes while that launcher runs (e.g. a container it started), so a name match on some
         # unrelated command can never make the job look running or receive its signals
         lead = leaders({"pid_file": spec["wrapper_pid_file"]})
-        if not lead:
+        groups = set(lead) | _orphaned_groups(spec["wrapper_pid_file"])
+        if not groups:
             return []
-        found = set(lead) | group_members(lead)
+        found = set(lead) | group_members(groups)
         if spec.get("pid_file") != spec["wrapper_pid_file"]:
             found |= set(_discover(spec))
         return sorted(p for p in found if alive(p))
