@@ -225,6 +225,12 @@ class Runner:
                 time.sleep(0.2)
             if any(D.alive(p) for p in pids):
                 j["driver"].signal(sig.SIGKILL)
+                for p in pids:                    # a child left behind when its group leader already exited
+                    if D.alive(p):
+                        try:
+                            os.kill(p, sig.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
             self._check_exits()
             j["state"], j["parked_at"] = PARKED, self.clock()
         self.audit("stop", target=name)

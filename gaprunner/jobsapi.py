@@ -1,10 +1,12 @@
 """Jobs API: other programs put jobs into the queue, from recipes the operator wrote.
 
-A caller never sends a command. The operator writes [[template]] entries: job recipes whose commands contain
-{{param}} slots, with each parameter's type and limits. A caller holds a token for one [[client]] entry, which says
-which templates it may use, how much GPU memory a job may ask for, how many unfinished jobs it may have and where its
-jobs enter the queue. A submission names a template and gives parameter values; GapRunner checks them, fills them
-in (shell-quoted in commands, also exported as GAPRUNNER_PARAM_<NAME>), and adds the job to the queue like any other.
+A caller never sends a command. The operator writes [[template]] entries: job recipes with typed, limited parameters.
+A caller holds a token for one [[client]] entry, which says which templates it may use, how much GPU memory a job may
+ask for, how many unfinished jobs it may have and where its jobs enter the queue. A submission names a template and
+gives parameter values; GapRunner checks them and adds the job to the queue like any other. Values reach the job's
+commands only as environment variables (GAPRUNNER_PARAM_<NAME>, and any env entry with a {{param}} slot), never as
+command text: a shell does not run what a variable holds, so no value can become code unless the template's own
+command hands it to eval, sh -c and the like. {{param}} slots may also appear in goal and notes (plain text).
 
 Submitted jobs are kept in <state_dir>/submitted.json, so they survive a restart. See docs/JOBS-API.md.
 
@@ -23,7 +25,6 @@ import json
 import math
 import os
 import re
-import shlex
 import time
 import uuid
 
@@ -83,20 +84,14 @@ def parse_templates(raw, error):
         for field, value in t.items():
             for text in _strings(value):
                 for slot in SLOT.findall(text):
-                    if field not in QUOTED + TEXT + ("env",):
-                        raise error(f"template {name}: {{{{{slot}}}}} can only be used in commands, goal, notes and env")
+                    if field in QUOTED:
+                        raise error(f"template {name}: {field}: commands can't contain {{{{{slot}}}}}; use "
+                                    f"\"$GAPRUNNER_PARAM_{slot.upper()}\" (values reach commands only as environment variables)")
+                    if field not in TEXT + ("env",):
+                        raise error(f"template {name}: {{{{{slot}}}}} can only be used in goal, notes and env")
                     if slot not in params:
                         raise error(f"template {name}: {{{{{slot}}}}} is not one of its params")
                     used.add(slot)
-                if field in QUOTED and SLOT.search(text):
-                    quoted = _quoted_slot(text)
-                    if quoted:
-                        raise error(f"template {name}: {field}: {{{{{quoted}}}}} is inside quotes or escaped; write it as a word of its "
-                                    f"own (GapRunner quotes the value) or use $GAPRUNNER_PARAM_{quoted.upper()}")
-                    again = _reparsed(text)
-                    if again:
-                        raise error(f"template {name}: {field} uses {again}, which reads its arguments as code again, so a "
-                                    "{{slot}} there isn't safe; use the $GAPRUNNER_PARAM_<NAME> variables in that command")
         out[name] = t
     return out
 
@@ -149,55 +144,6 @@ def parse_clients(raw, templates, error):
                      "max_jobs": int(c.get("max_jobs", 5)), "queue_at": c.get("queue_at", "bottom"),
                      "hold": bool(c.get("hold", False))}
     return out
-
-
-def _quoted_slot(cmd):
-    """The first {{slot}} that sits inside single or double quotes in a shell command, or None. A value is
-    shell-quoted when it is filled in, which keeps it one literal word only outside quotes: inside double quotes
-    the added single quotes are plain characters and $(...) in the value would run."""
-    single = double = False
-    i = 0
-    while i < len(cmd):
-        c = cmd[i]
-        if c == "\\" and not single:
-            m = SLOT.match(cmd, i + 1)
-            if m:
-                return m.group(1)              # \{{x}}: the backslash would eat the quote GapRunner adds
-            i += 2
-            continue
-        if c == "'" and not double:
-            single = not single
-        elif c == '"' and not single:
-            double = not double
-        elif cmd.startswith("{{", i):
-            m = SLOT.match(cmd, i)
-            if m:
-                if single or double or (i > 0 and cmd[i - 1] in "\\$"):
-                    return m.group(1)              # quoted, escaped (\{{x}}) or glued to $ ($'..', ${..})
-                i = m.end()
-                continue
-        i += 1
-    return None
-
-
-REPARSE = re.compile(r"<<|(^|[\s;&|(`])(?:[\w.+-]*/)*(eval|ssh|xargs|parallel|source|su|trap|watch|"
-                     r"(ba|z|da|k|fi)?sh|python3?|perl|ruby|node)(?=[\s;&|)`]|$)")
-
-
-def _reparsed(cmd):
-    """A part of a command that would read a filled-in value as code again: a here-document, eval, a shell started
-    with its own command line (sh -c ...), ssh, xargs and the like. Quoting a value once is not enough there."""
-    m = REPARSE.search(cmd)
-    if m is None:
-        return None
-    word = m.group(2) or "<<"
-    if word in ("python", "python3", "perl", "ruby", "node") and not re.search(rf"\b{word}\s+-[ce]\b|\b{word}\s+-\s*<<", cmd):
-        rest = REPARSE.search(cmd, m.end())
-        return _reparsed(cmd[m.end():]) if rest else None   # running a script file is fine; -c/-e and stdin code are not
-    if word in ("sh", "bash", "zsh", "dash", "ksh", "fish") and not re.search(rf"\b{word}\s+(-\w*c|-s|<<)", cmd):
-        rest = REPARSE.search(cmd, m.end())
-        return _reparsed(cmd[m.end():]) if rest else None   # `bash script.sh ARGS` passes ARGS as data
-    return word if word == "<<" else f"`{word}`"
 
 
 def _strings(value):
@@ -270,21 +216,19 @@ def validate_params(template, given):
 
 
 def render(template, values, name, gpu_gib):
-    """The job spec for these (checked) values: slots shell-quoted in commands, as given in goal, notes and env."""
+    """The job spec for these (checked) values: commands as written; values in the environment, goal and notes."""
 
-    def fill(text, quote):
-        return SLOT.sub(lambda m: shlex.quote(_text(values[m.group(1)])) if quote else _text(values[m.group(1)]), text)
+    def fill(text):
+        return SLOT.sub(lambda m: _text(values[m.group(1)]), text)
 
     spec = {}
     for k, v in template.items():
         if k in TEMPLATE_ONLY:
             continue
-        if k in QUOTED and isinstance(v, str):
-            spec[k] = fill(v, True)
-        elif k in TEXT and isinstance(v, str):
-            spec[k] = fill(v, False)
+        if k in TEXT and isinstance(v, str):
+            spec[k] = fill(v)
         elif k == "env":
-            spec[k] = {ek: fill(str(ev), False) for ek, ev in v.items()}
+            spec[k] = {ek: fill(str(ev)) for ek, ev in v.items()}
         else:
             spec[k] = json.loads(json.dumps(v))
     spec.setdefault("env", {})

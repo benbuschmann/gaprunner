@@ -9,14 +9,15 @@ API is shaped around that: the command is always yours, and a caller only fills 
 
 ## Templates
 
-A template is a `[[job]]` recipe with `{{param}}` slots and a `params` table.
+A template is a `[[job]]` recipe with a `params` table. A caller's values reach the job's commands only as
+environment variables, `GAPRUNNER_PARAM_<NAME>`, never as part of the command text.
 
 ```toml
 [[template]]
 name = "eval"
 description = "One benchmark suite against a model already on disk"
 driver = "restart"
-start_cmd = "python3 run_eval.py --model {{model}} --suite {{suite}} --items {{items}}"
+start_cmd = 'python3 run_eval.py --model "$GAPRUNNER_PARAM_MODEL" --suite "$GAPRUNNER_PARAM_SUITE" --items "$GAPRUNNER_PARAM_ITEMS"'
 workdir = "/srv/evals"
 gpu_gib = 24                  # what a job from this template takes; a caller may ask for more, never less
 max_gpu_gib = 48              # the most a caller may ask for
@@ -40,16 +41,15 @@ max = 500
 default = 50
 ```
 
-- **Slots** (`{{name}}`) may appear in the commands (`start_cmd`, `progress_cmd`, `saved_cmd`, `summary_cmd`,
-  `health_cmd`, `park_cmd`, `resume_cmd`, `state_cmd`), in `goal` and `notes`, and in `env` values. Every value is also
-  in the job's environment as `GAPRUNNER_PARAM_<NAME>`.
-- **In commands a slot must be a word of its own.** GapRunner shell-quotes the value, so `x'; rm -rf ~` arrives as one
-  literal argument, but that only holds where the shell reads the value once. GapRunner refuses a template that puts
-  a slot inside quotes (`"…{{x}}…"`), after a backslash or `$`, or in a command (also when given by path, like
-  `/bin/sh -c`) that reads its arguments as code again: a here-document (`<<`),
-  `eval`, `sh -c` / `bash -c`, `python -c` or a script on stdin, `ssh`, `su -c`, `xargs`, `parallel`, `watch`,
-  `trap`, `source`. Inside such commands use the variables (`"$GAPRUNNER_PARAM_X"`), which a shell expands without
-  running them. `timeout`, `env`, `nohup`, `sudo` and running a script file with arguments are fine.
+- **Values in commands:** use `"$GAPRUNNER_PARAM_<NAME>"`, in double quotes. A shell never runs what a variable
+  holds, so a value like `$(rm -rf ~)` or `x'; rm -rf ~` arrives as plain text. Every command of the job (start,
+  progress, saved point, summary, health, park and resume hooks) gets these variables.
+- **Don't hand a value to something that runs text as code:** `eval`, `sh -c "… $GAPRUNNER_PARAM_X …"`, `ssh host
+  "… $X …"`, `python -c`, `xargs` and the like would run a value. Pass it as an argument or read it from the
+  environment in your script instead. This is the one rule a template author has to keep; GapRunner can't check a
+  shell command for it.
+- **`{{param}}` slots** are only for `goal`, `notes` (shown on the page) and `env` values (for your own variable
+  names, e.g. `env = {MODEL_PATH = "/models/{{model}}"}`). A template with a slot in a command is refused.
 - **Parameter types:** `string` (`max_len`, default 1000; optional `pattern`), `int` and `float` (`min`, `max`),
   `bool`, `choice` (`choices`). A parameter with a `default` may be left out; one without is required unless it says
   `required = false`. Unknown parameters are refused.

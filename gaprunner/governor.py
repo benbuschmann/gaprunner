@@ -52,7 +52,7 @@ class Request:
         self.token, self.msg, self.conn, self.peer = token, msg, conn, peer
         self.asked_at, self.granted_at, self.revoked_at = time.time(), None, None
         self.granted, self.bound = threading.Event(), threading.Event()
-        self.binding, self.answered = None, False
+        self.binding, self.answered, self.closed = None, False, False
         self.send_lock = threading.Lock()
 
     def send(self, obj):
@@ -80,16 +80,31 @@ class GovernorJob(D.Driver):
             if r is None:
                 return IDLE
             if r.revoked_at is not None:
-                return PARKING if self._alive(r) else IDLE
-            if not r.granted.is_set():
+                if self._stepping_aside(r):
+                    return PARKING
+                self.req, ended = None, True      # revoked, and nothing of it is left
+                ended = "revoked"
+            elif not r.granted.is_set():
                 return PARKED                    # waiting in the queue
-            if r.binding is None or self._alive(r):
+            elif r.binding is None or self._alive(r):
                 return HOT                       # granted (and the app may still be starting its command)
-            self.req, ended = None, True         # its session ended without a release (the launcher was killed)
-        if ended:
+            else:
+                self.req, ended = None, True     # its session ended without a release (the launcher was killed)
+        if ended is True:
             self._event("ended", note="the session ended without a release")
+        if ended:
             self.on_change()
         return IDLE
+
+    def _stepping_aside(self, r):
+        """A revoked reservation still holds the GPU while its session lives, and, before the app has bound its
+        command, while the launcher is connected and might still start it (for grace_s plus bind_timeout_s)."""
+        if self._alive(r):
+            return True
+        if r.binding is None and not r.closed:
+            limit = float(self.spec.get("grace_s", 30)) + float(self.spec.get("bind_timeout_s", 30))
+            return time.time() - r.revoked_at < limit
+        return False
 
     def pids(self):
         with self.lock:
@@ -125,14 +140,18 @@ class GovernorJob(D.Driver):
             return time.time() - r.granted_at
 
     def expire_unbound(self):
+        """Revoke a grant the app never bound. Not forgotten yet: until its launcher disconnects or the grace runs
+        out, it may still start its command, and a late bind is recorded and revoked again (state() decides)."""
         with self.lock:
             r = self.req
+            if r is None or r.revoked_at is not None:
+                return
+            r.revoked_at = time.time()
         try:
             r.send({"op": "revoke", "grace_s": float(self.spec.get("grace_s", 30))})
         except OSError:
             pass
         self._event("revoke", note="admitted but never bound a command")
-        self._drop(r, None)
 
     def park(self):
         """Revoke the reservation: the app's command is stopped; whatever it was doing is lost."""
@@ -152,9 +171,9 @@ class GovernorJob(D.Driver):
             except OSError:
                 pass                              # the launcher is gone; its session ends with it or is waited out
         deadline = time.monotonic() + self.timeout
-        while self._alive(r) and time.monotonic() < deadline:
+        while self._stepping_aside(r) and time.monotonic() < deadline:
             time.sleep(0.1)
-        if self._alive(r):
+        if self._stepping_aside(r):
             raise D.DriverError(f"{self.spec['name']}: still running {self.timeout:.0f}s after its reservation was revoked")
         self._event("revoke", seconds=round(time.time() - r.revoked_at, 1))
         self._drop(r, None)
@@ -176,9 +195,15 @@ class GovernorJob(D.Driver):
             if not owned_by(bound, r.peer, launched=True):
                 self._event("bind_refused", note="the session is not the asking launcher's own")
                 return False
-            r.binding = bound
+            r.binding = bound                 # recorded even after a revoke, so the command is tracked until it ends
+            late = r.revoked_at is not None
         self.on_change()                      # write reservations.json and the token file before anyone is told
         r.bound.set()
+        if late:
+            try:
+                r.send({"op": "revoke", "grace_s": float(self.spec.get("grace_s", 30))})
+            except OSError:
+                pass
         return True
 
     def adopt(self, msg, conn, peer, issued):
@@ -217,6 +242,7 @@ class GovernorJob(D.Driver):
     def gone(self, r):
         """The reserve connection closed. Before a grant that ends the request; after one, the session decides."""
         with self.lock:
+            r.closed = True
             if self.req is not r:
                 return
             if not r.granted.is_set():

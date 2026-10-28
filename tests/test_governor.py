@@ -93,6 +93,22 @@ class GovernorSchedulingTest(unittest.TestCase):
         self.assertIn("makes room for wass", acts[0].reason)
 
 
+class LinesTest(unittest.TestCase):
+    def test_two_messages_sent_together_are_both_read(self):
+        import socket as so, importlib.util
+        spec_ = importlib.util.spec_from_file_location("ac", os.path.join(os.path.dirname(GV.__file__), "governor_client",
+                                                                           "admission_client.py"))
+        ac = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(ac)
+        a, b = so.socketpair()
+        a.sendall(b'{"allowed": true, "token": "t"}\n{"op": "revoke"}\n')
+        lines = ac.Lines(b)
+        self.assertTrue(lines.read()["allowed"])
+        self.assertTrue(lines.ready(0.1))                # the revoke is not stuck in a buffer select() can't see
+        self.assertEqual(lines.read()["op"], "revoke")
+        a.close(); b.close()
+
+
 class ShapeTest(unittest.TestCase):
     def test_shape_of_a_prompt(self):
         prompt = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "fasth3_8step.safetensors"}},
@@ -259,8 +275,34 @@ class GovernorProtocolTest(unittest.TestCase):
         time.sleep(0.4)
         self.gov.tick()
         self.assertEqual(json.loads(f.readline())["op"], "revoke")
-        self.assertEqual(self.job.state(), IDLE)
+        self.assertEqual(self.job.state(), PARKING)                     # not forgotten while it might still start
         c.close()
+        self.assertTrue(wait_for(lambda: self.job.state() == IDLE))       # its launcher is gone: nothing left
+
+    def test_a_bind_after_a_revoke_is_tracked_and_revoked_again(self):
+        import socket as so
+        c = so.socket(so.AF_UNIX)
+        c.connect(self.gov.sock_path)
+        c.sendall(b'{"op": "reserve", "owner": "studio-comfy"}\n')
+        self.assertTrue(wait_for(lambda: self.job.state() == PARKED))
+        self.job.spec["bind_timeout_s"] = 0.2
+        self.job.resume()
+        f = c.makefile("r")
+        token = json.loads(f.readline())["token"]
+        time.sleep(0.3)
+        self.gov.tick()                                                   # revoked before any bind
+        self.assertEqual(json.loads(f.readline())["op"], "revoke")
+        child = subprocess.Popen(["sleep", "30"], start_new_session=True) # the launcher started it anyway
+        try:
+            from gaprunner.governor_client import process_binding as pb
+            c.sendall((json.dumps({"op": "bind", "token": token, "binding": pb.binding(child.pid)}) + "\n").encode())
+            self.assertEqual(json.loads(f.readline())["op"], "revoke")    # told again
+            self.assertEqual(self.job.state(), PARKING)                  # and its command is counted
+        finally:
+            child.kill()
+            child.wait()
+            c.close()
+        self.assertTrue(wait_for(lambda: self.job.state() == IDLE))
 
     def test_the_command_dies_with_its_launcher(self):
         p = self.launch("sleep", "60")

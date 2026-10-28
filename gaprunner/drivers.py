@@ -365,7 +365,7 @@ class Command(Driver):
         cmd = self.spec.get(key)
         if not cmd:
             raise DriverError(f"no {key} configured")
-        env = {**os.environ, "GAPRUNNER_NAME": self.spec.get("name", "")}
+        env = {**os.environ, **self.spec.get("env", {}), "GAPRUNNER_NAME": self.spec.get("name", "")}
         r = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=self.timeout, env=env)
         if r.returncode != 0:
             raise DriverError(f"{key} exit {r.returncode}: {(r.stderr or r.stdout).strip()[:200]}")

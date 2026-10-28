@@ -49,6 +49,26 @@ def _read(f):
     return json.loads(line)
 
 
+class Lines:
+    """Newline-separated JSON from a socket, read without a buffer that select() can't see: a message that arrives
+    together with an earlier one is never left waiting."""
+
+    def __init__(self, sock):
+        self.sock, self.buf = sock, b""
+
+    def ready(self, timeout):
+        return b"\n" in self.buf or bool(select.select([self.sock], [], [], timeout)[0])
+
+    def read(self):
+        while b"\n" not in self.buf:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("GapRunner closed the connection")
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return json.loads(line)
+
+
 def rpc(request, socket_path, timeout=30):
     with _connect(socket_path, timeout) as s:
         _send(s, request)
@@ -85,10 +105,10 @@ def run(args, command):
     except OSError as e:
         _say(f"can't reach GapRunner at {args.socket}: {e}")
         return DENIED
-    f = s.makefile("r")
+    lines = Lines(s)
     _send(s, request)
     try:
-        answer = _read(f)
+        answer = lines.read()
     except (OSError, ValueError) as e:
         _say(f"no answer from GapRunner: {e}")
         return DENIED
@@ -100,7 +120,11 @@ def run(args, command):
                                            "SPARK_WORKLOAD_OWNER": args.owner},
                              start_new_session=True, preexec_fn=_die_with_parent)
     bound = process_binding.binding(child.pid)
-    _send(s, {"op": "bind", "token": token, "binding": bound})
+    conn = s
+    try:
+        _send(s, {"op": "bind", "token": token, "binding": bound})
+    except OSError:
+        conn = None                               # GapRunner went away just now: the loop below rebinds
     stop = {"at": None, "grace": grace}
 
     def asked_to_stop(*_):
@@ -110,7 +134,6 @@ def run(args, command):
 
     signal.signal(signal.SIGTERM, asked_to_stop)
     signal.signal(signal.SIGINT, asked_to_stop)
-    conn = s
     while child.poll() is None:
         if stop["at"] is not None and time.monotonic() - stop["at"] > stop["grace"]:
             _signal_group(child.pid, signal.SIGKILL)
@@ -118,19 +141,19 @@ def run(args, command):
             time.sleep(0.5)
             continue
         if conn is None:
-            conn = _rebind(args, token, bound)   # GapRunner restarted: tell the new one this session holds the GPU
-            if conn is None:
+            got = _rebind(args, token, bound)    # GapRunner restarted: tell the new one this session holds the GPU
+            if got is None:
                 time.sleep(1)
                 continue
-            if conn == "refused":                # it doesn't know this reservation: give the GPU back
+            if got == "refused":                 # it doesn't know this reservation: give the GPU back
+                conn = "refused"
                 asked_to_stop()
                 continue
-            f = conn.makefile("r")
+            conn, lines = got.sock, got
         try:
-            ready, _, _ = select.select([conn], [], [], 0.5)
-            if not ready:
+            if not lines.ready(0.5):
                 continue
-            msg = _read(f)
+            msg = lines.read()
         except (OSError, ValueError, ConnectionError):
             conn = None
             continue
@@ -161,13 +184,14 @@ def _rebind(args, token, bound):
         s = _connect(args.socket, 10)
         _send(s, {"op": "rebind", "owner": args.owner, "token": token, "binding": bound, "workload": args.workload,
                   "estimated_incremental_gib": args.estimated_incremental_gib, "pid": os.getpid()})
-        answer = _read(s.makefile("r"))
+        lines = Lines(s)
+        answer = lines.read()
         if not answer.get("allowed"):
             _say("GapRunner did not take the reservation back (" + str(answer.get("reason")) + "): stopping")
             s.close()
             return "refused"
         s.settimeout(None)
-        return s
+        return lines
     except (OSError, ValueError, ConnectionError):
         return None
 

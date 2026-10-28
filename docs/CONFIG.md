@@ -103,6 +103,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `park_s`, `resume_s`, `timeout_s` | `5.0`, `5.0`, `120` | first guesses for step-aside and come-back time; how long a step-aside may take |
 | `fallback` | none | `"restart"`: if CPU memory is too short to sleep, stop it instead (needs `start_cmd`) |
 | `max_hours` | none | step aside and wind down after this many hours of running |
+| `env` | `{}` | environment variables for every command of the job (start, progress, saved point, summary, health, hooks) |
 | `[running]`, `[parked]` | | memory per tier (`hbm_gib`, `cpu_gib`, `ssd_gib`); `ssd_paths` lets Measure fill in disk use. GapRunner also measures the host memory each park takes and uses it when it is larger than `parked.cpu_gib - running.cpu_gib` |
 | `progress_cmd` | none | prints progress (`12/50`, `24%`, `0.24`); an optional second line is the part in progress |
 | `saved_cmd` | none | prints the last saved point; Wind down stops the job when it changes, and GapRunner learns how long a job that loses work runs between saved points |
@@ -124,7 +125,7 @@ Recipes other programs may fill in, and the tokens that may use them, for the Jo
 | key | default | meaning |
 |---|---|---|
 | template `name`, `description` | | how callers refer to it |
-| template job fields | | the recipe: `driver` (`restart`, `cuda-checkpoint`, `command`), `start_cmd`, `workdir`, `env`, memory, placement, progress and the other run fields; `{{param}}` slots in commands (shell-quoted), `goal`, `notes` and `env` |
+| template job fields | | the recipe: `driver` (`restart`, `cuda-checkpoint`, `command`), `start_cmd`, `workdir`, `env`, memory, placement, progress and the other run fields; values reach commands as `$GAPRUNNER_PARAM_<NAME>`; `{{param}}` slots only in `goal`, `notes` and `env` |
 | template `max_gpu_gib` | its `gpu_gib` | the most GPU memory a caller may ask for |
 | `[template.params.<name>]` | | `type` (`string`, `int`, `float`, `bool`, `choice`), `default`, `required`, `min`, `max`, `max_len`, `pattern`, `choices` |
 | client `name`, `token_sha256` | | the caller, and the SHA-256 of its token (`gaprunner token`) |

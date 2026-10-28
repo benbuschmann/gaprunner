@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.27.0
+
+- **Jobs API templates: values reach commands only as environment variables.** A `{{param}}` slot in a command is
+  now refused; commands use `"$GAPRUNNER_PARAM_<NAME>"`, which a shell never runs. Slots stay in `goal`, `notes` and
+  `env`. Two reviews kept finding shell constructs that turned a pasted, quoted value back into code; this removes
+  the pasting. Templates written for 0.26 must change their commands.
+- A job's `env` now reaches every one of its commands (progress, saved point, summary, health, command-driver hooks),
+  not only `start_cmd`.
+- Governor jobs: a grant revoked before the app bound its command stays counted (stepping aside) until the launcher
+  disconnects or its grace runs out, and a bind that arrives after the revoke is recorded and revoked again. The
+  launcher reads GapRunner's messages without a buffer that could hold back a revoke, and rebinds when GapRunner goes
+  away just as it reports its binding.
+- Stopping or withdrawing a job SIGKILLs every process it had, including children left behind after their group
+  leader exited.
+
 ## 0.26.3
 
 More fixes from a second, independent review of the Jobs API and governor jobs:

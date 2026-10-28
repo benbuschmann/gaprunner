@@ -44,7 +44,7 @@ def _issues_for_job(runner, name, j, now, holders):
         j["health_cmd_at"] = now
         try:
             r = subprocess.run(["sh", "-c", sp["health_cmd"]], capture_output=True, text=True, timeout=30,
-                               cwd=os.path.expanduser(sp.get("workdir", ".")))
+                               cwd=os.path.expanduser(sp.get("workdir", ".")), env={**os.environ, **sp.get("env", {})})
             bad = None if r.returncode == 0 else \
                 f"health check failed (exit {r.returncode}){': ' + (r.stderr or r.stdout).strip()[:120] if (r.stderr or r.stdout).strip() else ''}"
         except (OSError, subprocess.TimeoutExpired):

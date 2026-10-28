@@ -41,7 +41,7 @@ def saved_point(spec, timeout=10):
     import os
     try:
         r = subprocess.run(["sh", "-c", spec["saved_cmd"]], capture_output=True, text=True, timeout=timeout,
-                           cwd=os.path.expanduser(spec.get("workdir", ".")))
+                           cwd=os.path.expanduser(spec.get("workdir", ".")), env={**os.environ, **spec.get("env", {})})
     except (OSError, subprocess.TimeoutExpired):
         return None
     line = r.stdout.strip().splitlines()[:1]
@@ -53,7 +53,7 @@ def summary(spec, timeout=20, lines=12):
     import os
     try:
         r = subprocess.run(["sh", "-c", spec["summary_cmd"]], capture_output=True, text=True, timeout=timeout,
-                           cwd=os.path.expanduser(spec.get("workdir", ".")))
+                           cwd=os.path.expanduser(spec.get("workdir", ".")), env={**os.environ, **spec.get("env", {})})
     except (OSError, subprocess.TimeoutExpired):
         return None
     out = [x.rstrip()[:200] for x in r.stdout.strip().splitlines() if x.strip()]
@@ -68,7 +68,7 @@ def read_both(spec, timeout=10):
         return None, "", None, ""
     try:
         r = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=timeout,
-                           cwd=os.path.expanduser(spec.get("workdir", ".")))
+                           cwd=os.path.expanduser(spec.get("workdir", ".")), env={**os.environ, **spec.get("env", {})})
     except (OSError, subprocess.TimeoutExpired):
         return None, "", None, ""
     lines = [x.strip() for x in r.stdout.strip().splitlines() if x.strip()]

@@ -18,13 +18,13 @@ sha = lambda t: hashlib.sha256(t.encode()).hexdigest()
 BASE = {"service": [{"name": "prod", "driver": "vllm", "upstream": "http://x", "listen": "127.0.0.1:0", "gpu_gib": 1}]}
 TEMPLATES = [
     {"name": "eval", "description": "a benchmark run", "driver": "restart", "gpu_gib": 20, "max_gpu_gib": 40,
-     "start_cmd": "python3 eval.py --model {{model}} --items {{items}} --note {{note}}",
+     "start_cmd": 'python3 eval.py --model "$GAPRUNNER_PARAM_MODEL" --items "$GAPRUNNER_PARAM_ITEMS" --note "$GAPRUNNER_PARAM_NOTE"',
      "goal": "evaluate {{model}}", "env": {"MODEL": "{{model}}"}, "workdir": "/tmp",
      "params": {"model": {"type": "string", "pattern": "[A-Za-z0-9._/-]+", "max_len": 100},
                 "items": {"type": "int", "min": 1, "max": 500, "default": 25},
                 "note": {"type": "string", "required": False, "default": ""},
                 "suite": {"type": "choice", "choices": ["v3", "v4.1"], "default": "v3"}}},
-    {"name": "render", "driver": "restart", "gpu_gib": 70, "start_cmd": "render {{prompt}}",
+    {"name": "render", "driver": "restart", "gpu_gib": 70, "start_cmd": 'render "$GAPRUNNER_PARAM_PROMPT"',
      "params": {"prompt": {"type": "string", "max_len": 2000}}},
 ]
 CLIENTS = [{"name": "agent", "token_sha256": sha(TOKEN), "templates": ["eval"], "max_gpu_gib": 30, "max_jobs": 2},
@@ -44,20 +44,14 @@ class TemplateConfigTest(unittest.TestCase):
     def test_bad_configs(self):
         t = TEMPLATES[0]
         for bad in ({**t, "start_cmd": "x {{nope}}"},                     # a slot with no param
-                    {**t, "workdir": "/tmp/{{model}}"},                  # slots only in commands, goal, notes, env
+                    {**t, "start_cmd": "run {{model}}"},                 # commands never take slots
+                    {**t, "progress_cmd": "tail {{note}}"},
+                    {**t, "start_cmd": "printf %s \\{{note}}"}, {**t, "start_cmd": '"/bin/sh" -c {{note}}'},
+                    {**t, "workdir": "/tmp/{{model}}"},                  # slots only in goal, notes and env
                     {**t, "pgrep": "x"},                                 # not a template field
                     {**t, "driver": "governor"},
                     {**t, "max_gpu_gib": 10},                            # below its own gpu_gib
-                    {**t, "params": {"items": {"type": "int", "min": 5, "default": 1}}},
-                    {**t, "start_cmd": 'echo "note: {{note}}"'},           # a slot inside double quotes
-                    {**t, "start_cmd": "echo 'note: {{note}}'"},           # or single quotes
-                    {**t, "progress_cmd": 'sh -c "tail {{note}}"'},
-                    {**t, "start_cmd": "python3 - <<EOF\nprint({{note}})\nEOF"},  # a here-document reads it as code
-                    {**t, "start_cmd": "bash -c run {{note}}"}, {**t, "start_cmd": "eval run {{note}}"},
-                    {**t, "start_cmd": "ssh host run {{note}}"}, {**t, "start_cmd": "echo {{note}} | xargs rm"},
-                    {**t, "start_cmd": "printf %s \\{{note}}"},             # an escaped slot (a reviewer's attack)
-                    {**t, "start_cmd": "/bin/sh -c run {{note}}"},          # an interpreter given by path
-                    {**t, "start_cmd": "echo $'{{note}}'"}, {**t, "start_cmd": "echo ${{note}}"}):
+                    {**t, "params": {"items": {"type": "int", "min": 5, "default": 1}}}):
             with self.assertRaises(C.ConfigError, msg=str(bad)[:80]):
                 self.parse([bad, TEMPLATES[1]], [])
         for bad in ({**CLIENTS[0], "token_sha256": "abc"}, {**CLIENTS[0], "templates": ["nope"]},
@@ -73,27 +67,27 @@ class RenderTest(unittest.TestCase):
     def setUp(self):
         self.t = C.parse({**BASE, "template": TEMPLATES})["templates"]["eval"]
 
-    def test_values_are_quoted_into_commands(self):
+    def test_values_reach_commands_only_through_the_environment(self):
         evil = "x'; rm -rf / #"
         v = J.validate_params(self.t, {"model": "qwen-27b", "note": evil})
-        spec = J.render(self.t, v, "eval (agent 1)", 20.0)
-        self.assertEqual(shlex.split(spec["start_cmd"]),
-                         ["python3", "eval.py", "--model", "qwen-27b", "--items", "25", "--note", evil])
+        spec = J.render(self.t, v, "agent 1: eval", 20.0)
+        self.assertEqual(spec["start_cmd"], self.t["start_cmd"])           # the command is the operator's, untouched
         self.assertEqual(spec["goal"], "evaluate qwen-27b")
         self.assertEqual(spec["env"]["MODEL"], "qwen-27b")
         self.assertEqual(spec["env"]["GAPRUNNER_PARAM_NOTE"], evil)
         self.assertEqual(spec["running"]["hbm_gib"], 20.0)
 
-    def test_slots_as_words_survive_hostile_values(self):
+    def test_hostile_values_stay_data(self):
         import subprocess, tempfile
         d = tempfile.mkdtemp()
         t = C.parse({**BASE, "template": [{"name": "x", "driver": "restart", "gpu_gib": 1,
-                                           "start_cmd": "printf '%s|' {{a}} --b={{a}} \"$GAPRUNNER_PARAM_A\"",
+                                           "start_cmd": 'printf "%s|" "$GAPRUNNER_PARAM_A" --b="$GAPRUNNER_PARAM_A" $GAPRUNNER_PARAM_A',
                                            "params": {"a": {"type": "string"}}}]})["templates"]["x"]
-        for evil in ("$(touch %s/pwned)" % d, "`touch %s/pwned`" % d, "a'b\"c; touch %s/pwned" % d, "-rf ~"):
+        for evil in ("$(touch %s/pwned)" % d, "`touch %s/pwned`" % d, "a'b\"c;touch %s/pwned" % d, "\\\\'; touch %s/pwned #" % d):
             spec = J.render(t, J.validate_params(t, {"a": evil}), "x", 1.0)
-            out = subprocess.run(["sh", "-c", spec["start_cmd"]], capture_output=True, text=True, env=spec["env"]).stdout
-            self.assertEqual(out, f"{evil}|--b={evil}|{evil}|")
+            out = subprocess.run(["sh", "-c", spec["start_cmd"]], capture_output=True, text=True,
+                                 env={"PATH": os.environ["PATH"], **spec["env"]}, cwd=d).stdout
+            self.assertTrue(out.startswith(f"{evil}|--b={evil}|"), out)
             self.assertFalse(os.path.exists(f"{d}/pwned"))
 
     def test_values_are_checked(self):
@@ -153,7 +147,7 @@ class JobsApiTest(unittest.TestCase):
         self.assertTrue(name.startswith("agent ") and name.endswith(": nightly eval"))
         self.assertIn(name, self.r.job)
         sp = self.r.job[name]["spec"]
-        self.assertIn("--model qwen", sp["start_cmd"])
+        self.assertEqual(sp["env"]["GAPRUNNER_PARAM_MODEL"], "qwen")
         self.assertEqual(sp["gpu_gib"], 20.0)
         self.assertIn("via agent", sp["tags"])
         q = self.call("GET", f"/api/jobs/{job['id']}")[1]["job"]
