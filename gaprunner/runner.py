@@ -1034,7 +1034,7 @@ class Runner:
                 if a.kind == "park_service":
                     s = self.svc[a.target]
                     s["state"] = PARKING            # set first, then re-check: see ensure_hot
-                    if s["inflight"]:
+                    if s["inflight"] or s["job_inflight"]:
                         s["state"] = HOT
                         continue
                     if self._transition(s, a.target, "park", a.reason):
