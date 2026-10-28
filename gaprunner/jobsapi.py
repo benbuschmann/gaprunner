@@ -287,7 +287,13 @@ class Submissions:
                 if t is None:
                     raise ValueError(f"template {row.get('template')!r} is no longer in the config")
                 old = row.get("spec") or {}
-                spec = render(t, validate_params(t, row.get("params") or {}), row["name"], float(row["gpu_gib"]))
+                client = self.clients[row["client"]]
+                gpu = max(float(row["gpu_gib"]), _gpu(t))            # at least what the template takes now
+                cap = min(t["max_gpu_gib"], client["max_gpu_gib"] if client["max_gpu_gib"] is not None else math.inf)
+                if gpu > cap:
+                    raise ValueError(f"gpu_gib {gpu:g} is over the current limit ({cap:g})")
+                row["gpu_gib"] = gpu
+                spec = render(t, validate_params(t, row.get("params") or {}), row["name"], gpu)
                 spec["hold"] = bool(old.get("hold")) or bool(t.get("hold")) or self.clients[row["client"]]["hold"]
                 spec["tags"] = list(old.get("tags") or [f"via {row['client']}"])
                 row["spec"] = spec

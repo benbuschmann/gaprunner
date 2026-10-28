@@ -132,12 +132,12 @@ def pids_from(spec):
         # only adds processes while that launcher runs (e.g. a container it started), so a name match on some
         # unrelated command can never make the job look running or receive its signals
         lead = leaders({"pid_file": spec["wrapper_pid_file"]})
-        groups = set(lead) | _orphaned_groups(spec["wrapper_pid_file"])
-        if not groups:
-            return []
-        found = set(lead) | group_members(groups)
-        if spec.get("pid_file") != spec["wrapper_pid_file"]:
-            found |= set(_discover(spec))
+        members = group_members(set(lead) | _orphaned_groups(spec["wrapper_pid_file"]))
+        if not lead and not members:
+            return []                             # nothing of the job is left
+        found = set(lead) | members
+        if lead and spec.get("pid_file") != spec["wrapper_pid_file"]:
+            found |= set(_discover(spec))         # the recipe's own discovery only while its launcher runs
         return sorted(p for p in found if alive(p))
     return sorted(p for p in set(_discover(spec)) if alive(p))
 

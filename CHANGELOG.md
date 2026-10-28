@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.2
+
+- Fixes two regressions in 0.27.1, both found in review: after a job's process group had fully exited, the recipe's
+  own process discovery (`pgrep`, `pids_cmd`) ran again and could attribute an unrelated process to the finished job;
+  and a stored submission rebuilt from a template whose `gpu_gib` had grown kept its old, smaller figure. A rebuilt
+  job now takes at least the template's current `gpu_gib`, and one over the current limits is dropped.
+
 ## 0.27.1
 
 - Jobs API: stored submissions are made again from the current template at each start, never run as stored, so a

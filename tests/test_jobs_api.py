@@ -220,6 +220,14 @@ class JobsApiTest(unittest.TestCase):
         self.assertEqual(r2.job[mine["name"]]["spec"]["start_cmd"], fresh["templates"]["eval"]["start_cmd"])
         self.assertEqual(r2.job[mine["name"]]["spec"]["env"]["GAPRUNNER_PARAM_MODEL"], "qwen")
 
+    def test_a_rebuilt_job_takes_the_template_s_memory_now(self):
+        mine = self.submit()[1]["job"]                                   # 20 GiB, the template's figure then
+        self.stop.set()
+        bigger = [{**TEMPLATES[0], "gpu_gib": 28}, TEMPLATES[1]]          # the operator raised it
+        fresh = C.parse({**BASE, "gaprunner": {"state_dir": self.r.top["state_dir"]}, "template": bigger, "client": CLIENTS})
+        r2 = Runner(fresh, gpu=self.gpu)
+        self.assertEqual(r2.job[mine["name"]]["spec"]["gpu_gib"], 28.0)
+
     def test_a_removed_client_s_jobs_do_not_come_back(self):
         self.submit()
         self.stop.set()

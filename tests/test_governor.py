@@ -113,6 +113,15 @@ class OrphanedGroupTest(unittest.TestCase):
             self.assertIn(child, D.pids_from({"wrapper_pid_file": pid_file, "pid_file": pid_file, "group": True}))
         finally:
             os.kill(child, 9)
+        time.sleep(0.3)
+        # the whole group is gone: nothing is found, not even by the recipe's own discovery
+        spec2 = {"wrapper_pid_file": pid_file, "pid_file": os.path.join(d, "other"), "pgrep": "sleep"}
+        keep = subprocess.Popen(["sleep", "30"])
+        try:
+            self.assertEqual(D.pids_from(spec2), [])
+        finally:
+            keep.kill()
+            keep.wait()
 
 
 class LinesTest(unittest.TestCase):
