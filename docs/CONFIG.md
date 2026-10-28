@@ -77,7 +77,7 @@ A model server GapRunner protects. Required: `name`, `listen`, and either the en
 | `warm_cmd` | none | run in the background after the engine wakes or starts, to bring it back to full speed (e.g. read tables that live in the page cache back into memory); requests are answered meanwhile, and the page shows it as warming up. Output goes to `<state_dir>/service-<name>-warm.log` |
 | `warm_hold_max_s` | `300` | the service isn't put to sleep while its `warm_cmd` runs, for at most this long |
 | `restart_on_failed_wake` | `true` | when a wake fails, requests get a 503 at once and GapRunner restarts the service with `stop_cmd` then `start_cmd` (if it has them) |
-| `dead_retry_s` | `60` | without stop and start commands: how long after a failed wake requests fail fast before a wake is tried again |
+| `dead_retry_s` | `60` | delay before retrying a failed restart command; without stop and start commands, how long after a failed wake requests fail fast before a wake is tried again |
 | `pids_cmd`, `pgrep`, `pid_file` | none | how to find its processes (for memory and "unknown use"); `pids_cmd` suits containers |
 | `metrics_url` | `<upstream>/metrics` for vllm/sglang | Prometheus metrics for the page's engine stats |
 
