@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.0
+
+- `progress_every_s`: how often a job's `progress_cmd` is read (30 s, as before, unless set; at least 1 s). An app whose
+  work comes in short pieces, such as a video app rendering one clip at a time through the governor, can report each
+  clip's progress and have it show while the clip runs.
+
 ## 0.27.2
 
 - Fixes two regressions in 0.27.1, both found in review: after a job's process group had fully exited, the recipe's

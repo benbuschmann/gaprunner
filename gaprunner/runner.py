@@ -587,7 +587,8 @@ class Runner:
         return None
 
     def _track_progress(self):
-        """Count each job's running time, and read its progress_cmd every 30 s (or once after it stops)."""
+        """Count each job's running time, and read its progress_cmd every progress_every_s (30 s by default; or once
+        after it stops)."""
         from . import progress
         now = self.clock()
         q = C.queue_overrides(self.top)
@@ -623,7 +624,7 @@ class Runner:
                 got = progress.summary(j["spec"])
                 if got is not None:
                     j["summary"] = got
-            if j["spec"].get("progress_cmd") and now - j["progress_at"] >= 30:
+            if j["spec"].get("progress_cmd") and now - j["progress_at"] >= max(1.0, float(j["spec"].get("progress_every_s", 30))):
                 j["progress_at"] = now
                 frac, text, sub, sub_text = progress.read_both(j["spec"])
                 if (sub, sub_text) != (j.get("part"), j.get("part_text")) and (sub is not None or sub_text):

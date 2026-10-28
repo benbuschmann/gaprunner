@@ -106,6 +106,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `env` | `{}` | environment variables for every command of the job (start, progress, saved point, summary, health, hooks) |
 | `[running]`, `[parked]` | | memory per tier (`hbm_gib`, `cpu_gib`, `ssd_gib`); `ssd_paths` lets Measure fill in disk use. GapRunner also measures the host memory each park takes and uses it when it is larger than `parked.cpu_gib - running.cpu_gib` |
 | `progress_cmd` | none | prints progress (`12/50`, `24%`, `0.24`); an optional second line is the part in progress |
+| `progress_every_s` | 30 | how often `progress_cmd` is read (at least 1 s). A few seconds suits jobs whose work comes in short pieces, such as an app rendering one video clip at a time |
 | `saved_cmd` | none | prints the last saved point; Wind down stops the job when it changes, and GapRunner learns how long a job that loses work runs between saved points |
 | `loses_work` | `true` for `restart`, else `false` | stepping aside throws away the work since the last saved point (see [Jobs that lose work](RECIPES.md#jobs-that-lose-work-when-they-step-aside)) |
 | `save_every_s` | none | first guess of the running time between saved points, until `saved_cmd` has measured it |
