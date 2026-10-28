@@ -1,4 +1,6 @@
 """Stop and withdraw release the transition lock, but own the old run until the wait finishes."""
+import os
+import shlex
 import signal
 import tempfile
 import threading
@@ -79,6 +81,40 @@ class StopWithoutLockTest(unittest.TestCase):
             else:
                 r.tick()
                 self.assertEqual(starts, [True] if start else [])
+
+    def test_stop_kills_a_real_process_that_ignores_term(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        ready = os.path.join(folder.name, "ready")
+        gpu = FakeGpu(100.0)
+        r = R.Runner(C.parse({
+            "gaprunner": {"mode": "live", "state_dir": folder.name},
+            "service": [{"name": "prod", "driver": "fake", "gpu": gpu,
+                         "upstream": "http://127.0.0.1:9", "listen": "127.0.0.1:0", "gpu_gib": 60}],
+            "job": [{"name": "slow", "driver": "restart", "gpu_gib": 10,
+                     "start_cmd": f"trap '' TERM; touch {shlex.quote(ready)}; exec sleep 60"}],
+        }), gpu=gpu)
+        with r.lock:
+            self.assertTrue(r._start("slow"))
+        proc = r.job["slow"]["proc"]
+        def cleanup():
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=3)
+        self.addCleanup(cleanup)
+        deadline = time.monotonic() + 3
+        while not os.path.exists(ready) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(os.path.exists(ready), "the SIGTERM handler was not installed")
+        now = [0.0]
+        def sleep(seconds):
+            self.assertIsNone(proc.poll(), "the process should ignore SIGTERM")
+            now[0] += seconds
+        with patch.object(R, "time", Mock(wraps=time, monotonic=lambda: now[0], sleep=sleep)):
+            r.stop_job("slow")
+        self.assertEqual(proc.wait(timeout=3), -signal.SIGKILL)
+        self.assertGreaterEqual(now[0], 15)
+        self.assertFalse(r.job["slow"]["driver"].pids())
 
     def test_stop_waits_without_the_lock_and_still_kills(self):
         self.exercise()
