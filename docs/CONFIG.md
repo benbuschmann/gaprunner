@@ -114,7 +114,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `health_cmd`, `health_grace_s` | none, `900` | non-zero exit = unhealthy (after the grace period at start) |
 | `stall_after_s` | `1800` | flag it as stuck when neither its progress nor its log has moved for this long |
 | `metrics_url` | none | Prometheus metrics of the job's own server, for speed and engine stats |
-| `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke |
+| `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke (GapRunner waits at most `grace_s` + 10 s, or `timeout_s` if lower, for a revoked app to step aside) |
 | `bind_timeout_s` | `30` | governor jobs: an admitted app that hasn't started its command by then is revoked |
 | `comfy_url`, `idle_release_s` | none, `600` | governor jobs: the app's ComfyUI, to record each prompt it runs; revoke after this long with nothing to run (0 = never) |
 | driver fields | | `url`, `headers` (vllm, sglang, park-protocol); `park_cmd`, `resume_cmd`, `state_cmd` (command); `pid_file`, `pids`, `pids_cmd`, `pgrep`, `sudo`, `cuda_checkpoint` (cuda-checkpoint and adopted jobs) |

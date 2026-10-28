@@ -476,5 +476,25 @@ class RecorderTest(unittest.TestCase):
         comfy.server.shutdown()
 
 
+class RevokeWaitTest(unittest.TestCase):
+    def test_a_revoke_the_app_ignores_waits_its_grace_not_timeout_s(self):
+        # the park runs under the scheduler's lock: an app still there after its own grace period isn't stepping aside
+        from gaprunner import drivers as D
+        sent = []
+        class Conn:
+            def sendall(self, b):
+                sent.append(json.loads(b))
+        j = GV.GovernorJob(spec(timeout_s=30, grace_s=0.5))
+        r = GV.Request("tok", {}, Conn(), {})
+        r.granted_at = time.time()
+        r.granted.set()                                              # granted; its launcher stays connected
+        j.req = r
+        t0 = time.monotonic()
+        with self.assertRaises(D.DriverError):
+            j.park()
+        self.assertLess(time.monotonic() - t0, 0.5 + 11)
+        self.assertEqual(sent[0]["op"], "revoke")
+
+
 if __name__ == "__main__":
     unittest.main()
