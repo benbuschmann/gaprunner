@@ -88,6 +88,15 @@ def parse_templates(raw, error):
                     if slot not in params:
                         raise error(f"template {name}: {{{{{slot}}}}} is not one of its params")
                     used.add(slot)
+                if field in QUOTED and SLOT.search(text):
+                    quoted = _quoted_slot(text)
+                    if quoted:
+                        raise error(f"template {name}: {field}: {{{{{quoted}}}}} is inside quotes; write it as a word of its "
+                                    f"own (GapRunner quotes the value) or use $GAPRUNNER_PARAM_{quoted.upper()}")
+                    again = _reparsed(text)
+                    if again:
+                        raise error(f"template {name}: {field} uses {again}, which reads its arguments as code again, so a "
+                                    "{{slot}} there isn't safe; use the $GAPRUNNER_PARAM_<NAME> variables in that command")
         out[name] = t
     return out
 
@@ -116,8 +125,8 @@ def parse_clients(raw, templates, error):
     out, hashes = {}, set()
     for c in raw:
         name = c.get("name")
-        if not name or not isinstance(name, str):
-            raise error("[[client]] needs a name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", name):
+            raise error("[[client]] needs a name of 1 to 24 letters, digits, - or _")
         if name in out:
             raise error(f"two clients are named {name!r}")
         h = str(c.get("token_sha256", "")).lower()
@@ -142,6 +151,52 @@ def parse_clients(raw, templates, error):
     return out
 
 
+def _quoted_slot(cmd):
+    """The first {{slot}} that sits inside single or double quotes in a shell command, or None. A value is
+    shell-quoted when it is filled in, which keeps it one literal word only outside quotes: inside double quotes
+    the added single quotes are plain characters and $(...) in the value would run."""
+    single = double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "\\" and not single:
+            i += 2
+            continue
+        if c == "'" and not double:
+            single = not single
+        elif c == '"' and not single:
+            double = not double
+        elif cmd.startswith("{{", i):
+            m = SLOT.match(cmd, i)
+            if m:
+                if single or double:
+                    return m.group(1)
+                i = m.end()
+                continue
+        i += 1
+    return None
+
+
+REPARSE = re.compile(r"<<|(^|[\s;&|(`])(eval|ssh|xargs|parallel|source|su|trap|watch|"
+                     r"(ba|z|da|k|fi)?sh|python3?|perl|ruby|node)(?=[\s;&|)`]|$)")
+
+
+def _reparsed(cmd):
+    """A part of a command that would read a filled-in value as code again: a here-document, eval, a shell started
+    with its own command line (sh -c ...), ssh, xargs and the like. Quoting a value once is not enough there."""
+    m = REPARSE.search(cmd)
+    if m is None:
+        return None
+    word = m.group(2) or "<<"
+    if word in ("python", "python3", "perl", "ruby", "node") and not re.search(rf"\b{word}\s+-[ce]\b|\b{word}\s+-\s*<<", cmd):
+        rest = REPARSE.search(cmd, m.end())
+        return _reparsed(cmd[m.end():]) if rest else None   # running a script file is fine; -c/-e and stdin code are not
+    if word in ("sh", "bash", "zsh", "dash", "ksh", "fish") and not re.search(rf"\b{word}\s+(-\w*c|-s|<<)", cmd):
+        rest = REPARSE.search(cmd, m.end())
+        return _reparsed(cmd[m.end():]) if rest else None   # `bash script.sh ARGS` passes ARGS as data
+    return word if word == "<<" else f"`{word}`"
+
+
 def _strings(value):
     if isinstance(value, str):
         yield value
@@ -162,7 +217,8 @@ def validate_value(pn, p, v):
             raise SubmitError(400, f"{pn}: true or false")
         return v
     if t in ("int", "float"):
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or (t == "int" and not float(v).is_integer()):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or (t == "int" and not isinstance(v, int)
+                                                                       and not (math.isfinite(v) and v.is_integer())):
             raise SubmitError(400, f"{pn}: {'a whole number' if t == 'int' else 'a number'}")
         v = int(v) if t == "int" else float(v)
         if not math.isfinite(v):
@@ -263,6 +319,10 @@ class Submissions:
         except (OSError, ValueError):
             rows = []
         for row in rows:
+            if row.get("client") not in self.clients:
+                self.runner.audit("job_submission_dropped", target=row.get("name"),
+                                  error=f"client {row.get('client')!r} is no longer in the config")
+                continue
             if row.get("name") in self.runner.job:
                 self.rows.append(row)             # already known (a runner built from a config that holds it)
                 continue
@@ -315,6 +375,8 @@ class Submissions:
             raise SubmitError(403, f"this token may not use template {t['name']!r}")
         values = validate_params(t, body.get("params", {}))
         gpu = body.get("gpu_gib", _gpu(t))
+        if isinstance(gpu, (int, float)) and not isinstance(gpu, bool) and gpu < _gpu(t):
+            raise SubmitError(400, f"gpu_gib: at least {_gpu(t):g} for {t['name']} (what its recipe takes)")
         if isinstance(gpu, bool) or not isinstance(gpu, (int, float)) or gpu <= 0:
             raise SubmitError(400, "gpu_gib: a positive number")
         cap = min(t["max_gpu_gib"], client["max_gpu_gib"] if client["max_gpu_gib"] is not None else math.inf)
@@ -323,16 +385,18 @@ class Submissions:
         label = str(body.get("name") or t["name"])
         if not re.fullmatch(r"[\w .,:#()+-]{1,80}", label):
             raise SubmitError(400, "name: up to 80 letters, digits, spaces and . , : # ( ) + -")
-        hold = body.get("hold", client["hold"])
-        if not isinstance(hold, bool) or (client["hold"] and not hold):
-            raise SubmitError(400 if not isinstance(hold, bool) else 403,
-                              "hold: true or false" if not isinstance(hold, bool) else "this token's jobs start wound down")
+        hold = body.get("hold", False)
+        if not isinstance(hold, bool):
+            raise SubmitError(400, "hold: true or false")
+        if (client["hold"] or t.get("hold")) and not hold and "hold" in body:
+            raise SubmitError(403, "jobs from this token or template start wound down")
+        hold = hold or client["hold"] or bool(t.get("hold"))
         with self.runner.lock:
             open_jobs = [r for r in self.rows if r["client"] == client["name"] and not self._finished(r)]
             if len(open_jobs) >= client["max_jobs"]:
                 raise SubmitError(409, f"this token already has {len(open_jobs)} unfinished jobs (limit {client['max_jobs']})")
             jid = uuid.uuid4().hex[:8]
-            name = f"{label} ({client['name']} {jid})"
+            name = f"{client['name']} {jid}: {label}"
             spec = render(t, values, name, float(gpu))
             spec["hold"] = hold
             spec["tags"] = list(spec.get("tags") or []) + [f"via {client['name']}"]

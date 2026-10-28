@@ -352,6 +352,17 @@ def act(runner, body):
 def make_handler(runner):
     class UI(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        timeout = 60                          # a client that stops sending mid-request is dropped
+
+        def _length(self, limit):
+            """The request body's length, or an error response's (code, message)."""
+            raw = self.headers.get("Content-Length") or "0"
+            if not raw.isdigit():
+                return None, (400, "Content-Length must be a whole number of bytes")
+            n = int(raw)
+            if n > limit:
+                return None, (413, f"at most {limit} bytes")
+            return n, None
 
         def log_message(self, *a):
             pass
@@ -420,17 +431,17 @@ def make_handler(runner):
                     return self._send(200, {"ok": True, **subs.withdraw(client, jid)})
             except SubmitError as e:
                 return self._send(e.code, {"ok": False, "error": str(e)})
-            except ValueError as e:
-                return self._send(400, {"ok": False, "error": str(e)})
+            except (ValueError, TypeError, OverflowError, KeyError) as e:
+                return self._send(400, {"ok": False, "error": f"bad request: {e}"[:300]})
             self._send(405, {"ok": False, "error": "method not allowed"})
 
         def do_POST(self):
             path = urllib.parse.urlparse(self.path).path.rstrip("/")
             if path == "/api/jobs":
                 from .jobsapi import MAX_BODY
-                size = int(self.headers.get("Content-Length") or 0)
-                if size > MAX_BODY:
-                    return self._send(413, {"ok": False, "error": f"at most {MAX_BODY} bytes"})
+                size, bad = self._length(MAX_BODY)
+                if bad:
+                    return self._send(bad[0], {"ok": False, "error": bad[1]})
                 try:
                     body = json.loads(self.rfile.read(size) or b"{}")
                 except ValueError:
@@ -439,7 +450,10 @@ def make_handler(runner):
             if path != "/api/action":
                 return self._send(404, {"error": "not found"})
             try:
-                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")
+                size, bad = self._length(8192)
+                if bad:
+                    return self._send(bad[0], {"ok": False, "error": bad[1]})
+                body = json.loads(self.rfile.read(size) or b"{}")
             except ValueError:
                 return self._send(400, {"ok": False, "error": "bad json"})
             pin = read_pin(runner)

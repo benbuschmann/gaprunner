@@ -48,10 +48,17 @@ class TemplateConfigTest(unittest.TestCase):
                     {**t, "pgrep": "x"},                                 # not a template field
                     {**t, "driver": "governor"},
                     {**t, "max_gpu_gib": 10},                            # below its own gpu_gib
-                    {**t, "params": {"items": {"type": "int", "min": 5, "default": 1}}}):
+                    {**t, "params": {"items": {"type": "int", "min": 5, "default": 1}}},
+                    {**t, "start_cmd": 'echo "note: {{note}}"'},           # a slot inside double quotes
+                    {**t, "start_cmd": "echo 'note: {{note}}'"},           # or single quotes
+                    {**t, "progress_cmd": 'sh -c "tail {{note}}"'},
+                    {**t, "start_cmd": "python3 - <<EOF\nprint({{note}})\nEOF"},  # a here-document reads it as code
+                    {**t, "start_cmd": "bash -c run {{note}}"}, {**t, "start_cmd": "eval run {{note}}"},
+                    {**t, "start_cmd": "ssh host run {{note}}"}, {**t, "start_cmd": "echo {{note}} | xargs rm"}):
             with self.assertRaises(C.ConfigError, msg=str(bad)[:80]):
                 self.parse([bad, TEMPLATES[1]], [])
         for bad in ({**CLIENTS[0], "token_sha256": "abc"}, {**CLIENTS[0], "templates": ["nope"]},
+                    {**CLIENTS[0], "name": "a client"}, {**CLIENTS[0], "name": "x" * 25},
                     {**CLIENTS[0], "queue_at": "middle"}):
             with self.assertRaises(C.ConfigError):
                 self.parse(TEMPLATES, [bad])
@@ -73,6 +80,18 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(spec["env"]["MODEL"], "qwen-27b")
         self.assertEqual(spec["env"]["GAPRUNNER_PARAM_NOTE"], evil)
         self.assertEqual(spec["running"]["hbm_gib"], 20.0)
+
+    def test_slots_as_words_survive_hostile_values(self):
+        import subprocess, tempfile
+        d = tempfile.mkdtemp()
+        t = C.parse({**BASE, "template": [{"name": "x", "driver": "restart", "gpu_gib": 1,
+                                           "start_cmd": "printf '%s|' {{a}} --b={{a}} \"$GAPRUNNER_PARAM_A\"",
+                                           "params": {"a": {"type": "string"}}}]})["templates"]["x"]
+        for evil in ("$(touch %s/pwned)" % d, "`touch %s/pwned`" % d, "a'b\"c; touch %s/pwned" % d, "-rf ~"):
+            spec = J.render(t, J.validate_params(t, {"a": evil}), "x", 1.0)
+            out = subprocess.run(["sh", "-c", spec["start_cmd"]], capture_output=True, text=True, env=spec["env"]).stdout
+            self.assertEqual(out, f"{evil}|--b={evil}|{evil}|")
+            self.assertFalse(os.path.exists(f"{d}/pwned"))
 
     def test_values_are_checked(self):
         for params, needle in (({}, "model: required"), ({"model": "a b"}, "must match"),
@@ -128,7 +147,7 @@ class JobsApiTest(unittest.TestCase):
         self.assertEqual(code, 201, out)
         job = out["job"]
         name = job["name"]
-        self.assertTrue(name.startswith("nightly eval (agent "))
+        self.assertTrue(name.startswith("agent ") and name.endswith(": nightly eval"))
         self.assertIn(name, self.r.job)
         sp = self.r.job[name]["spec"]
         self.assertIn("--model qwen", sp["start_cmd"])
@@ -152,6 +171,43 @@ class JobsApiTest(unittest.TestCase):
         self.assertEqual(self.submit(template="nope")[0], 404)
         self.assertEqual(self.submit(start_cmd="sh")[0], 400)              # no fields beyond the documented ones
         self.assertEqual(self.submit(name="x; y")[0], 400)
+
+    def test_more_limits(self):
+        self.assertEqual(self.submit(gpu_gib=10)[0], 400)                  # less than the recipe takes
+        code, out = self.call("POST", "/api/jobs", {"template": ["x"], "params": {}})
+        self.assertEqual(code, 400, out)                                   # not a template name
+        self.assertEqual(self.submit(params={"model": "m", "items": 10 ** 400})[0], 400)
+        long = "a" * 80                                                    # names that would share files
+        c1, o1 = self.submit(name=long)
+        c2, o2 = self.submit(name=long)
+        self.assertEqual((c1, c2), (201, 201))
+        from gaprunner.runner import _slug
+        self.assertNotEqual(_slug(o1["job"]["name"]), _slug(o2["job"]["name"]))
+
+    def test_bad_lengths(self):
+        import socket
+        for length in ("-1", "abc"):
+            s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            s.sendall(f"POST /api/jobs HTTP/1.1\r\nHost: x\r\nContent-Length: {length}\r\n\r\n".encode())
+            self.assertIn(b" 400 ", s.recv(200))
+            s.close()
+
+    def test_a_template_hold_holds(self):
+        tpl = {**TEMPLATES[1], "hold": True}
+        self.r.cfg["templates"]["render"] = C.parse({**BASE, "template": [tpl]})["templates"]["render"]
+        self.r.submissions.templates = self.r.cfg["templates"]
+        self.assertEqual(self.submit(token=OTHER, template="render", params={"prompt": "x"}, hold=False)[0], 403)
+        code, out = self.submit(token=OTHER, template="render", params={"prompt": "x"})
+        self.assertTrue(self.r.job[out["job"]["name"]]["spec"]["hold"])
+
+    def test_a_removed_client_s_jobs_do_not_come_back(self):
+        self.submit()
+        self.stop.set()
+        fresh = C.parse({**BASE, "gaprunner": {"state_dir": self.r.top["state_dir"]}, "template": TEMPLATES,
+                         "client": CLIENTS[1:]})                       # "agent" is gone
+        r2 = Runner(fresh, gpu=self.gpu)
+        self.assertEqual(r2.submissions.rows, [])
+        self.assertFalse(any(n.startswith("agent ") for n in r2.job))
 
     def test_top_of_the_queue_and_hold(self):
         code, out = self.submit(token=OTHER, template="render", params={"prompt": "a lighthouse"})

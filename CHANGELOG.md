@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.26.2
+
+Security fixes for the Jobs API and governor jobs, from an end-to-end test and a review:
+
+- A template whose `{{slot}}` sits inside quotes, or in a command that reads its arguments as code again (a
+  here-document, `eval`, `sh -c`, `python -c`, `ssh`, `xargs`, ...), is refused: a value could run commands there.
+  Use `$GAPRUNNER_PARAM_<NAME>` in such commands.
+- Submitted jobs are named `<client> <id>: <label>`, and a job whose files would share a name with another job's is
+  refused. Before, two long labels could share pid and result files, so one client could stop another's job.
+- A request with a negative or non-numeric `Content-Length` is answered 400 (it could make GapRunner read without
+  end), and a client that stops sending mid-request is dropped after 60 s. Malformed Jobs API bodies get 400.
+- A caller can't ask for less GPU memory than the template's `gpu_gib`, nor start a job the template or client holds.
+- Client names are 1 to 24 letters, digits, `-` or `_`. Removing a client revokes its stored jobs at the next start.
+- Governor jobs: a binding must be the asking user's own process session, started by its launcher; only that user can
+  release the reservation; after a restart only a token GapRunner issued can be taken back. The governor folder may
+  not be a symbolic link or sit in a folder others can write without the sticky bit. Reservations are written before
+  the app is told it may start.
+
 ## 0.26.1
 
 - A service started at the end of a window (or restarted after a failed wake) is no longer put to sleep for being idle

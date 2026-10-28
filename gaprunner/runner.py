@@ -117,6 +117,9 @@ class Runner:
         with self.lock:
             if spec.get("name") in self.job or spec.get("name") in self.svc:
                 raise ValueError(f"a job named {spec.get('name')!r} already exists")
+            if _slug(str(spec.get("name"))) in {_slug(n) for n in self.job}:
+                # its pid, result and log files would be another job's (names are cut to 60 characters for files)
+                raise ValueError(f"a job's files would clash with another job's: choose a different name")
             if spec.get("driver") == "governor":
                 raise ValueError("governor jobs come from the config")
             spec = job_defaults(spec, max((e["spec"]["order"] for e in self.job.values()), default=-1) + 1)

@@ -223,6 +223,25 @@ class GovernorProtocolTest(unittest.TestCase):
         self.job.resume()
         self.assertEqual(p.wait(10), 0)
 
+    def test_a_binding_must_be_the_launcher_s_own_session(self):
+        self.assertFalse(GV.owned_by({"sid": os.getsid(0), "leader": os.getpid(), "uid": os.getuid()},
+                                     {"uid": os.getuid() + 1, "pid": None}))           # another user's peer
+        self.assertFalse(GV.owned_by({"sid": 1, "leader": 1, "uid": 0}, {"uid": os.getuid(), "pid": None}))
+        self.assertFalse(GV.owned_by("x", {"uid": os.getuid()}))
+        # a forged rebind with a token GapRunner never issued is refused
+        out = self.rpc({"op": "rebind", "owner": "studio-comfy", "token": "made-up",
+                        "binding": {"sid": os.getsid(0), "leader": os.getpid(), "uid": os.getuid()}})
+        self.assertFalse(out["allowed"])
+        self.assertEqual(self.job.state(), IDLE)
+
+    def test_the_folder_must_not_be_a_link(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        os.symlink(tempfile.mkdtemp(), os.path.join(d, "gov"))
+        r = StubRunner(os.path.join(d, "gov"))
+        with self.assertRaises(RuntimeError):
+            GV.Governor(r, [GV.GovernorJob(spec())]).install()
+
     def test_unknown_owner(self):
         p = self.launch("true", owner="nobody")
         self.assertEqual(p.wait(10), 3)

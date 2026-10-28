@@ -18,7 +18,7 @@ description = "One benchmark suite against a model already on disk"
 driver = "restart"
 start_cmd = "python3 run_eval.py --model {{model}} --suite {{suite}} --items {{items}}"
 workdir = "/srv/evals"
-gpu_gib = 24                  # what a job from this template is given unless the caller asks for less or more
+gpu_gib = 24                  # what a job from this template takes; a caller may ask for more, never less
 max_gpu_gib = 48              # the most a caller may ask for
 progress_cmd = "python3 run_eval.py --progress"
 goal = "{{suite}} on {{model}}"
@@ -41,9 +41,14 @@ default = 50
 ```
 
 - **Slots** (`{{name}}`) may appear in the commands (`start_cmd`, `progress_cmd`, `saved_cmd`, `summary_cmd`,
-  `health_cmd`, `park_cmd`, `resume_cmd`, `state_cmd`), in `goal` and `notes`, and in `env` values. In commands a
-  value is always shell-quoted, so `x'; rm -rf ~` arrives as one literal argument. Every value is also in the job's
-  environment as `GAPRUNNER_PARAM_<NAME>`.
+  `health_cmd`, `park_cmd`, `resume_cmd`, `state_cmd`), in `goal` and `notes`, and in `env` values. Every value is also
+  in the job's environment as `GAPRUNNER_PARAM_<NAME>`.
+- **In commands a slot must be a word of its own.** GapRunner shell-quotes the value, so `x'; rm -rf ~` arrives as one
+  literal argument, but that only holds where the shell reads the value once. GapRunner refuses a template that puts
+  a slot inside quotes (`"…{{x}}…"`), or in a command that reads its arguments as code again: a here-document (`<<`),
+  `eval`, `sh -c` / `bash -c`, `python -c` or a script on stdin, `ssh`, `su -c`, `xargs`, `parallel`, `watch`,
+  `trap`, `source`. Inside such commands use the variables (`"$GAPRUNNER_PARAM_X"`), which a shell expands without
+  running them. `timeout`, `env`, `nohup`, `sudo` and running a script file with arguments are fine.
 - **Parameter types:** `string` (`max_len`, default 1000; optional `pattern`), `int` and `float` (`min`, `max`),
   `bool`, `choice` (`choices`). A parameter with a `default` may be left out; one without is required unless it says
   `required = false`. Unknown parameters are refused.
@@ -56,7 +61,7 @@ default = 50
 
 ```toml
 [[client]]
-name = "eval-agent"
+name = "eval-agent"           # 1 to 24 letters, digits, - or _
 token_sha256 = "3c67fb78c912cbbbbf66c0a4dd0e63d0b993c2d2c6b17f5027c4fd1df2c1604c"
 templates = ["eval"]          # or ["*"] for every template
 max_gpu_gib = 32              # a lower cap than the templates' own (optional)
@@ -68,8 +73,10 @@ hold = false                  # true: its jobs start wound down, and you press S
 `gaprunner token` prints a new token and the `token_sha256` line for it. The config never holds the token itself.
 Give the token to the program once; a lost token is replaced by making a new one.
 
-The API is served on `ui_listen`, next to the page. Keep that address on loopback or a private network: GapRunner
-speaks plain HTTP.
+The API is served on `ui_listen`, next to the page. Keep that address on loopback or a private network (a VPN such
+as Tailscale or WireGuard): GapRunner speaks plain HTTP, so on an open network a token could be read in transit.
+Anyone who can reach the address can read `/api/status`, including every job's parameters. Changing templates or
+clients takes a GapRunner restart; jobs already submitted are kept.
 
 ## Endpoints
 
@@ -92,14 +99,15 @@ The templates this token may use, with their parameters and the most GPU memory 
 {"template": "eval", "params": {"model": "qwen3.8-27b", "suite": "v4.1"}, "name": "nightly v4.1", "gpu_gib": 30}
 ```
 
-`name` (optional, up to 80 characters) labels the job; GapRunner adds the client's name and an id, so the job is
-called `nightly v4.1 (eval-agent 3f2a91c0)`. `gpu_gib` (optional) is held to the template's and the client's limits.
-`hold` (optional) starts it wound down; a client with `hold = true` can't turn that off.
+`name` (optional, up to 80 characters) labels the job; GapRunner puts the client's name and an id first, so the job
+is called `eval-agent 3f2a91c0: nightly v4.1`. `gpu_gib` (optional) is at least the template's `gpu_gib` and at most
+the template's and the client's limits. `hold` (optional) starts it wound down; when the client or the template says
+`hold = true`, the caller can't turn that off.
 
 `201` with the job:
 
 ```json
-{"ok": true, "job": {"id": "3f2a91c0", "name": "nightly v4.1 (eval-agent 3f2a91c0)", "template": "eval",
+{"ok": true, "job": {"id": "3f2a91c0", "name": "eval-agent 3f2a91c0: nightly v4.1", "template": "eval",
                      "params": {"model": "qwen3.8-27b", "suite": "v4.1", "items": 50}, "gpu_gib": 30,
                      "state": "parked", "word": "waiting", "why": "...", "progress": null, "result": null}}
 ```
@@ -120,7 +128,8 @@ queue.
 ## What is kept
 
 Submitted jobs are stored in `<state_dir>/submitted.json` with their template, values and the recipe they were made
-into, so a restart puts them back in the queue as they were, even if the template has changed since. Finished jobs
+into, so a restart puts them back in the queue as they were, even if the template has changed since. Removing a
+`[[client]]` revokes its jobs too: at the next start they are not put back (the audit log says so). Finished jobs
 stay until withdrawn, and only unfinished ones count toward `max_jobs`. The audit log records `job_submitted` (with
 the client, template and values, long text cut to 200 characters) and `job_withdrawn`.
 

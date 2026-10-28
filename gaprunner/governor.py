@@ -155,16 +155,23 @@ class GovernorJob(D.Driver):
             r = self.req
             if r is None or r.token != token or not r.granted.is_set():
                 return False
+            if not owned_by(bound, r.peer, launched=True):
+                self._event("bind_refused", note="the session is not the asking launcher's own")
+                return False
             r.binding = bound
+        self.on_change()                      # write reservations.json and the token file before anyone is told
         r.bound.set()
-        self.on_change()
         return True
 
-    def adopt(self, msg, conn, peer):
-        """A launcher whose GapRunner restarted: take back its live reservation."""
+    def adopt(self, msg, conn, peer, issued):
+        """A launcher whose GapRunner restarted: take back its live reservation. Only a token this GapRunner issued
+        to the same user, for a session that user owns."""
         bound = msg.get("binding")
-        if not bound or not PB.session(bound):
-            return False, "that session has ended"
+        known = issued.get(str(msg.get("token")))
+        if not known or known.get("owner") != self.owner or known.get("uid") != peer.get("uid"):
+            return False, "GapRunner did not issue that reservation"
+        if not owned_by(bound, peer) or not PB.session(bound):
+            return False, "that session has ended or is not yours"
         with self.lock:
             if self.req is not None and self.req.token != msg.get("token"):
                 return False, f"{self.spec['name']} already has another reservation"
@@ -177,11 +184,13 @@ class GovernorJob(D.Driver):
         self._event("adopt")
         return True, None
 
-    def release(self, token):
+    def release(self, token, peer=None):
         with self.lock:
             r = self.req
             if r is None or r.token != token:
                 return False
+            if peer is not None and peer.get("uid") != r.peer.get("uid"):
+                return False                          # only the user who holds a reservation releases it
         held = round(time.time() - (r.granted_at or r.asked_at), 1)
         self._drop(r, None)
         self._event("release", held_s=held)
@@ -205,6 +214,14 @@ class GovernorJob(D.Driver):
             if self.req is not r or r.granted.is_set():
                 return
         self._refuse(r, f"GapRunner did not make room within {wait_s:.0f} s")
+
+    def issued(self):
+        """{token: {"owner", "uid"}} of the reservation granted now, for adopting it after a restart."""
+        with self.lock:
+            r = self.req
+            if r is None or not r.granted.is_set():
+                return {}
+            return {r.token: {"owner": self.owner, "uid": r.peer.get("uid")}}
 
     def reservations(self):
         with self.lock:
@@ -246,6 +263,28 @@ class GovernorJob(D.Driver):
         self.events.append({"t": round(time.time(), 1), "event": what, **kw})
 
 
+def owned_by(bound, peer, launched=False):
+    """Whether a binding names a live process session of the connecting user (and, with launched, one the
+    connecting process started itself). GapRunner signals a reservation's processes, so it must never take a
+    binding that points at someone else's."""
+    if not isinstance(bound, dict) or not all(isinstance(bound.get(k), int) for k in ("sid", "leader", "uid")):
+        return False
+    leader = PB.process(bound["leader"])
+    if leader is None or leader["uid"] != peer.get("uid") or bound["uid"] != peer.get("uid"):
+        return False
+    if leader["sid"] != bound["sid"] or bound.get("start") not in (None, leader["start"]):
+        return False
+    if launched and peer.get("pid") is not None:
+        try:
+            with open(f"/proc/{bound['leader']}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+        if ppid != peer["pid"]:
+            return False
+    return True
+
+
 class Governor:
     """Serves the admission socket for every governor job, and keeps the folder the app reads."""
 
@@ -259,6 +298,13 @@ class Governor:
         self.lock = threading.Lock()
         self.server, self.conns = None, set()
         self.recorders = {j.spec["name"]: Recorder(runner, j) for j in jobs if j.spec.get("comfy_url")}
+        # tokens granted before a restart, so their launchers can take them back (kept where only GapRunner reads)
+        self.tokens_path = os.path.join(runner.top["state_dir"], "governor-tokens.json")
+        try:
+            with open(self.tokens_path) as f:
+                self.prior = json.load(f)
+        except (OSError, ValueError):
+            self.prior = {}
         self.was_hot = {}
         for j in jobs:
             j.on_change = self.write_reservations
@@ -266,10 +312,19 @@ class Governor:
     def install(self):
         """Create the folder the app reads: the client modules (refreshed from this GapRunner), state/ and an empty
         reservations.json. Refuses a folder another user owns."""
-        os.makedirs(self.state_dir, mode=0o755, exist_ok=True)
+        import stat
+        parent = os.path.dirname(os.path.abspath(self.folder))
+        pst = os.stat(parent)
+        if pst.st_mode & stat.S_IWOTH and not pst.st_mode & stat.S_ISVTX:
+            raise RuntimeError(f"{parent} is writable by every user without the sticky bit; put governor_dir elsewhere")
         for p in (self.folder, self.state_dir):
-            if os.stat(p).st_uid != os.getuid():
-                raise RuntimeError(f"{p} belongs to another user; GapRunner keeps its governor folder to itself")
+            if os.path.islink(p):
+                raise RuntimeError(f"{p} is a symbolic link; GapRunner won't use it as its governor folder")
+            if not os.path.exists(p):
+                os.mkdir(p, 0o755)
+            st = os.lstat(p)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+                raise RuntimeError(f"{p} is not a folder of GapRunner's own user; GapRunner keeps its governor folder to itself")
             os.chmod(p, 0o755)
         src = resources.files("gaprunner").joinpath("governor_client")
         for name in CLIENT_FILES:
@@ -285,6 +340,12 @@ class Governor:
         path = os.path.join(self.state_dir, "reservations.json")
         with self.lock:                       # read and write under one lock: a slower writer never puts back old rows
             rows = [row for j in self.by_owner.values() for row in j.reservations()]
+            tokens = {**self.prior, **{k: v for j in self.by_owner.values() for k, v in j.issued().items()}}
+            ttmp = f"{self.tokens_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            fd = os.open(ttmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({k: v for k, v in tokens.items() if k in {r["token"] for r in rows} or k in self.prior}, f)
+            os.replace(ttmp, self.tokens_path)
             tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"     # never another writer's temporary file
             with open(tmp, "w") as f:
                 json.dump({"reservations": rows, "t": round(time.time(), 1)}, f)
@@ -397,7 +458,7 @@ class Governor:
                         self.by_owner[held.msg["owner"]].bind(msg.get("token"), msg.get("binding"))
                 elif op == "release":
                     job = self._job_of_token(msg.get("token"), msg.get("owner"))
-                    ok = bool(job and job.release(msg.get("token")))
+                    ok = bool(job and job.release(msg.get("token"), peer))
                     if held is None:                           # a one-shot rpc wants an answer
                         conn.sendall((json.dumps({"allowed": ok} if ok else
                                                  {"allowed": True, "reason": "no such reservation"}) + "\n").encode())
@@ -475,7 +536,9 @@ class Governor:
         if job is None:
             conn.sendall(b'{"allowed": false, "reason": "no such job"}\n')
             return None
-        ok, why = job.adopt(msg, conn, peer)
+        ok, why = job.adopt(msg, conn, peer, self.prior)
+        if ok:
+            self.prior.pop(str(msg.get("token")), None)       # now a live reservation again; kept from here on
         conn.sendall((json.dumps({"allowed": ok, **({"reason": why} if why else {})}) + "\n").encode())
         if ok:
             self.runner.audit("governor_adopt", target=job.spec["name"])

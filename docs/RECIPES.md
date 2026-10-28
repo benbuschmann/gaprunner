@@ -220,8 +220,13 @@ reason). An app that hands work to several machines can use it to skip this one 
 
 **In shadow mode** a request is admitted at once, and the work is still recorded.
 
-**Who may ask.** GapRunner's own user, plus the uids in `governor_uids` (checked with `SO_PEERCRED`). The folder must
-belong to GapRunner's user; GapRunner refuses one that doesn't.
+**Who may ask.** GapRunner's own user, plus the uids in `governor_uids` (checked with `SO_PEERCRED`). A reservation
+is bound only to a process session of the user who asked, started by the asking launcher; only that user can release
+it; after a GapRunner restart a launcher takes it back only with the token GapRunner issued (kept in
+`<state_dir>/governor-tokens.json`, readable by GapRunner's user alone). The folder must belong to GapRunner's user
+and must not be a symbolic link, and its parent must not be writable by others without the sticky bit (`/var/tmp`
+is fine; so is a folder of GapRunner's own). The app reads the reservation tokens in `state/reservations.json`, so
+that file is readable by every local user.
 
 ## Adopting a job you start yourself
 
