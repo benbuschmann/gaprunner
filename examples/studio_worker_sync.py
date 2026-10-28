@@ -3,7 +3,7 @@
 
 Run on the head (the machine whose Studio hands clips to workers), e.g. from cron every minute:
 
-    * * * * * python3 wass_worker_sync.py --gaprunner http://station:8096 --job "WASS video" \
+    * * * * * python3 studio_worker_sync.py --gaprunner http://station:8096 --job "Video renders" \
                   --worker station-studio --key-cmd "bash ~/imagination-studio/scripts/studio-key.sh --key"
 
 The worker's renderer asks GapRunner before it starts (driver = "governor"). When GapRunner wouldn't admit it now

@@ -235,7 +235,7 @@ it works and empty lists when it doesn't. Without that, GapRunner sees no work a
 `admit_wait_s`: when the job is wound down or turned off, window-only with no window open, or the kill switch or Wind
 down all is on. `/api/status` shows this for each governor job as `admits_now` and, when false, `not_now` (the
 reason). An app that hands work to several machines can use it to skip this one meanwhile;
-[examples/wass_worker_sync.py](../examples/wass_worker_sync.py) does that for Imagination Studio's worker list.
+[examples/studio_worker_sync.py](../examples/studio_worker_sync.py) does that for Imagination Studio's worker list.
 
 **In shadow mode** a request is admitted at once, and the work is still recorded.
 

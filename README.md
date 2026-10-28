@@ -34,7 +34,7 @@ GPU. It is early (0.x) and has been running in production on one NVIDIA DGX Stat
 | **Saved work** | A job that loses unsaved work when stopped gets only quiet spells long enough to reach its next saved point, and every lost stretch is recorded. |
 | **Work you run by hand** | Claims: a process you started yourself is counted in memory, or holds the queue while it runs. |
 | **Jobs API** | Other programs put jobs into the queue from templates you write: a caller fills in typed, checked parameters, never a command. Each program has its own token, limited to some templates, a GPU memory cap and a number of open jobs ([JOBS-API.md](docs/JOBS-API.md)). |
-| **Apps that ask first** | An app that starts its own GPU server when someone asks for work can ask GapRunner for a reservation and wait in the queue in its place (`driver = "governor"`). Imagination Studio's renderer speaks this protocol. Each piece of work it runs is recorded with its size, time and memory. |
+| **Apps that ask first** | An app that starts its own GPU server when someone asks for work can ask GapRunner for a reservation and wait in the queue in its place (`driver = "governor"`). Imagination Studio's renderer speaks this protocol ([how we run it](docs/IMAGINATION-STUDIO.md)). Each piece of work it runs is recorded with its size, time and memory. |
 | **Recipes** | A job is a TOML entry: how to start it, its goal, progress, saved-point, summary and health commands, its memory per tier, a colour. |
 | **For agents** | An [agent guide](docs/AGENT-GUIDE.md), a drop-in [skill](skills/gaprunner/SKILL.md) and [llms.txt](llms.txt), so coding agents can read state, queue jobs and explain why a job is waiting. |
 
@@ -66,6 +66,22 @@ Over **7.3 hours and 1,214 requests** to the model:
   on the GPU.
 
 That's one machine and one workload. Yours will look different.
+
+## Video renders from Imagination Studio
+
+Some GPU work doesn't come from a recipe. [Imagination Studio](https://github.com/wassermanproductions/imagination-studio)
+renders clips with sound and can send them to other machines. On the same Station, its renderer asks GapRunner for
+the GPU before it starts ComfyUI (`driver = "governor"`). GapRunner puts the model to sleep, parks the training run at
+its last saved step, and grants the reservation: 4.1 s the first time we tried it, under a second when nothing has to
+move. Clips render one after another, each one is recorded (size, frames, passes, time, GPU and host peak), and after
+10 quiet minutes the GPU goes back to the queue.
+
+![GapRunner during an example hour: the model asleep, Imagination Studio's renderer on pass 3 of 4 of a clip, a LoRA run waiting its turn](docs/images/gaprunner-video-renders.png)
+
+A 864x480 clip of 107 frames with 4 passes renders in about 6.8 s on the GB300 once warm. The per-render records are
+how we found where the time went: the studio's int8 path is tuned for the DGX Spark and is slow on a GB300, and its
+int8 video decoder alone took 6.7 s of a 12.3 s clip. Setup, numbers and the GB300 settings:
+[docs/IMAGINATION-STUDIO.md](docs/IMAGINATION-STUDIO.md).
 
 ## How it works
 
@@ -193,6 +209,7 @@ request path, also run `gaprunner watchdog` with a `bypass_cmd`
 
 - [Job recipes](docs/RECIPES.md): placements, drivers, lifecycle, calibration, with examples
 - [Config reference](docs/CONFIG.md): every field and its default
+- [Imagination Studio renders](docs/IMAGINATION-STUDIO.md): a video studio's renderer on the same GPU, with setup and GB300 numbers
 - [Agent guide](docs/AGENT-GUIDE.md): for AI agents on a GapRunner machine; plus the [skill](skills/gaprunner/SKILL.md) and [llms.txt](llms.txt)
 - [Design](docs/DESIGN.md): the pieces, the decisions and the roadmap
 - [Prior art](docs/PRIOR-ART.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [AGENTS.md](AGENTS.md) for code changes
