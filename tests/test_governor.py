@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 import fakes  # noqa: F401 -- test settings (no host-memory reading, immediate process discovery)
 from test_scheduler import LONG, POL, job, kinds, snap
@@ -484,16 +485,23 @@ class RevokeWaitTest(unittest.TestCase):
         class Conn:
             def sendall(self, b):
                 sent.append(json.loads(b))
-        j = GV.GovernorJob(spec(timeout_s=30, grace_s=0.5))
-        r = GV.Request("tok", {}, Conn(), {})
-        r.granted_at = time.time()
-        r.granted.set()                                              # granted; its launcher stays connected
-        j.req = r
-        t0 = time.monotonic()
-        with self.assertRaises(D.DriverError):
-            j.park()
-        self.assertLess(time.monotonic() - t0, 0.5 + 11)
-        self.assertEqual(sent[0]["op"], "revoke")
+        for timeout, expected in ((30, 10.5), (2, 2)):
+            with self.subTest(timeout=timeout):
+                j = GV.GovernorJob(spec(timeout_s=timeout, grace_s=0.5))
+                r = GV.Request("tok", {}, Conn(), {})
+                r.granted_at = time.time()
+                r.granted.set()  # granted; its launcher stays connected
+                j.req = r
+                now = [0.0]
+                def sleep(seconds):
+                    now[0] += seconds
+                clock = Mock(wraps=time, monotonic=lambda: now[0], sleep=sleep)
+                with patch.object(GV, "time", clock), self.assertRaises(D.DriverError):
+                    j.park()
+                self.assertGreaterEqual(now[0], expected)
+                self.assertLess(now[0], expected + 0.2)
+                self.assertEqual(sent[-1], {"op": "revoke", "grace_s": 0.5})
+
 
 
 if __name__ == "__main__":
