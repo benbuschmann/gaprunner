@@ -20,8 +20,10 @@ class WindDownTest(unittest.TestCase):
                                        audit=lambda ev, **k: self.events.append(ev))
         self.j = {"spec": {"saved_cmd": f"cat {self.f}", "workdir": self.d}, "state": HOT, "frozen": False}
 
+        self.r.job = {"bench": self.j}
+
     def tick(self, now, held=True):
-        Runner._wind_down_at_saved_point(self.r, "9B", self.j, held, now)
+        Runner._wind_down_at_saved_point(self.r, "bench", self.j, held, now)
 
     def test_stops_at_the_next_saved_point(self):
         self.tick(0)                                   # winding down starts at saved point 6

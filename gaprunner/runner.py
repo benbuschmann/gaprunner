@@ -208,7 +208,7 @@ class Runner:
 
     def coexist_of(self, name):
         """The job's placement, with a change made on the page (queue override) winning over the recipe."""
-        return C.queue_overrides(self.top).get(name, {}).get("coexist") or self.job[name]["spec"]["coexist"]
+        return C.queue_overrides(self.top).get(name, {}).get("coexist") or self.job.get(name, {}).get("spec", {}).get("coexist", "no")
 
     def stop_job(self, name):
         """Stop: end the job now (SIGTERM to its processes, SIGKILL after 15 s) and wind it down, so it doesn't start
@@ -292,12 +292,12 @@ class Runner:
             return
         with self.count_lock:
             first = not any(e["inflight"] for e in self.svc.values())
-            if s["inflight"] == 0:
+            s["inflight"] += 1                 # count before any bookkeeping that can raise
+            if s["inflight"] == 1:
                 gap = self.clock() - s["last_done"]
                 if gap > 0:
                     s["gaps"].add(gap)
                 self._activity(name, "start")
-            s["inflight"] += 1
         if first and self.live:
             for jn, j in list(self.job.items()):      # a copy: the Jobs API may add or remove a job meanwhile
                 if self.coexist_of(jn) == "yield" and j["state"] == HOT and not j["paused"] and not j["frozen"]:
@@ -594,19 +594,22 @@ class Runner:
     def tags_of(self, name):
         """Tags set in the UI, else the recipe's `tags`."""
         t = C.queue_overrides(self.top).get(name, {}).get("tags")
-        return list(self.job[name]["spec"].get("tags", []) if t is None else t)
+        return list(self.job.get(name, {}).get("spec", {}).get("tags", []) if t is None else t)
 
     def after_of(self, name):
         """The jobs this one waits for: set in the UI (Queue), else the recipe's `after`."""
         a = C.queue_overrides(self.top).get(name, {}).get("after")
-        return [d for d in (self.job[name]["spec"].get("after", []) if a is None else a) if d in self.job]
+        return [d for d in (self.job.get(name, {}).get("spec", {}).get("after", []) if a is None else a) if d in self.job]
 
     def _blocked_by(self, j, name):
         want, svc = j["spec"].get("requires_engine"), j["spec"].get("target_service")
         if want and self.svc[svc]["engine"] != want:
             return f"waiting for {svc} to run {want} (it runs {self.svc[svc]['engine']})"
         for dep in self.after_of(name):
-            r = (self.job[dep]["result"] or {}).get("rc")
+            entry = self.job.get(dep)
+            if entry is None:
+                continue
+            r = (entry["result"] or {}).get("rc")
             if r is None:
                 return f"waiting for {dep} to finish"
             if r != 0:
@@ -632,8 +635,10 @@ class Runner:
             self._track_saves(n, j, running, now)
             cap = j["spec"].get("max_hours")
             if cap and running and j["run_s"] - j.get("cap_base", 0.0) >= float(cap) * 3600:
-                self._set_hold(n, True)
                 with self.lock:
+                    if self.job.get(n) is not j:
+                        continue
+                    self._set_hold(n, True)
                     self._park_job(n, reason=f"reached max_hours = {cap}")
                 j["cap_base"] = j["run_s"]
                 self.audit("max_hours", target=n, note=f"ran {cap} h; parked and held; release it to give it another {cap} h")
@@ -675,8 +680,8 @@ class Runner:
 
     def unsaved_s(self, n):
         """Running time since a work-losing job's last saved point (what stepping aside now would lose), or None."""
-        j = self.job[n]
-        if not j["spec"]["loses_work"] or j["save_run_s"] is None or j["state"] != HOT:
+        j = self.job.get(n)
+        if j is None or not j["spec"]["loses_work"] or j["save_run_s"] is None or j["state"] != HOT:
             return None
         return max(0.0, j["run_s"] - j["save_run_s"])
 
@@ -697,6 +702,8 @@ class Runner:
             j["saved_base"] = v                       # where it was when winding down started
         elif v != j["saved_base"]:
             with self.lock:
+                if self.job.get(n) is not j:
+                    return
                 self._park_job(n, reason=f"wound down: stopped at its saved point {v}")
             self.audit("wound_down", target=n, note=f"stopped at its saved point {v}; Start or Queue continues from there")
             j["saved_base"] = None
@@ -1125,15 +1132,14 @@ class Runner:
             if mine:
                 gib[n], measured[n] = round(sum(p["gib"] for p in mine), 2), True
             elif e["state"] == HOT:
-                guess.append(n)
+                guess.append((n, float(e["spec"]["gpu_gib"])))
             else:
                 gib[n], measured[n] = 0.0, True
         stow = [p for p in procs if p["pid"] not in claimed]
         # an entry seen only as "hot" (no pids found) is counted at its recipe size, but only out of the GPU memory
         # nothing else accounts for, so a guess never double-counts unknown processes or exceeds the GPU
         left = max(0.0, (reading or {}).get("used_gib", 0.0) - sum(gib.values()) - sum(p["gib"] for p in stow)) if reading else None
-        for n in guess:
-            g = float({**self.svc, **self.job}[n]["spec"]["gpu_gib"])
+        for n, g in guess:
             gib[n], measured[n] = (round(min(g, left), 2) if left is not None else g), False
             if left is not None:
                 left -= gib[n]
