@@ -11,7 +11,7 @@
   visible and further restarts wait `dead_retry_s`.
 - Stop on the page and a Jobs API withdraw no longer hold GapRunner's lock while they wait (up to 15 s) for the job to
   exit. A request for a sleeping service, the tick and other actions go ahead meanwhile; the stopped job still isn't
-  started again.
+  started again. Start during the wait takes effect only after Stop finishes; a withdrawn job cannot restart.
 - A governor app that is still running 10 s after its `grace_s` (30 s by default) once its reservation was revoked
   now counts as stuck right away, instead of after `timeout_s` (120 s by default). The tick's parks hold the lock
   while they wait, so a request for a sleeping service waited that long too.

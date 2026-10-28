@@ -142,18 +142,25 @@ class Runner:
 
     def remove_job(self, name):
         """Take a job out (the Jobs API's withdraw): stopped first if it holds anything, then forgotten."""
-        if name not in self.job:
-            raise ValueError("no such job")
-        # stop_job holds it in the queue file before it looks for processes, so the scheduler can't start it in
-        # between, and a job that starts at that moment is stopped, not lost; its wait doesn't hold the lock
-        self.stop_job(name)
         with self.lock:
-            self.job.pop(name, None)
-            self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
-            with self.queue_lock:
-                q = C.read_queue(self.top)
-                q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
-                C.write_queue(self.top, q)
+            if name not in self.job:
+                raise ValueError("no such job")
+            j = self.job[name]
+            if j.get("stopping") or j.get("withdrawing"):
+                raise ValueError(f"{name} is already stopping")
+            j["withdrawing"] = True
+        try:
+            self.stop_job(name)
+            with self.lock:
+                self.job.pop(name, None)
+                self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
+                with self.queue_lock:
+                    q = C.read_queue(self.top)
+                    q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
+                    C.write_queue(self.top, q)
+        finally:
+            with self.lock:
+                j.pop("withdrawing", None)
 
     def status_of(self, name):
         """{"word", "why"} for one job, as /api/status says it."""
@@ -207,36 +214,44 @@ class Runner:
         """Stop: end the job now (SIGTERM to its processes, SIGKILL after 15 s) and wind it down, so it doesn't start
         again until someone presses Start. A resumable job continues from its last checkpoint then."""
         import signal as sig
-        j = self.job[name]
-        self._set_hold(name, True)
         with self.lock:
-            pids = j["driver"].pids()
-            if not pids:
-                return f"{name} wasn't running; it's wound down until you press Start"
-            if j["frozen"] or j["paused"]:
-                j["driver"].unpause()            # a stopped (SIGSTOP) process can't act on SIGTERM
-                j["frozen"] = j["paused"] = False
-                if os.path.exists(self._frozen_path(name)):
-                    os.remove(self._frozen_path(name))
-            j["expect_exit"] = True
-            j["driver"].signal(sig.SIGTERM)
-        # wait without the lock, so a wake or a tick can go ahead meanwhile; the hold above keeps it from restarting
-        deadline = time.monotonic() + 15
-        while any(D.alive(p) for p in pids) and time.monotonic() < deadline:
-            time.sleep(0.2)
-        with self.lock:
-            if any(D.alive(p) for p in pids):
-                j["driver"].signal(sig.SIGKILL)
-                for p in pids:                    # a child left behind when its group leader already exited
-                    if D.alive(p):
-                        try:
-                            os.kill(p, sig.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
-            self._check_exits()
-            j["state"], j["parked_at"] = PARKED, self.clock()
-        self.audit("stop", target=name)
-        return f"Stopped {name}; it's wound down until you press Start"
+            j = self.job[name]
+            if j.get("stopping"):
+                raise ValueError(f"{name} is already stopping")
+            self._set_hold(name, True)
+            j["stopping"] = True
+        try:
+            with self.lock:
+                pids = j["driver"].pids()
+                if not pids:
+                    return f"{name} wasn't running; it's wound down until you press Start"
+                if j["frozen"] or j["paused"]:
+                    j["driver"].unpause()            # a stopped (SIGSTOP) process can't act on SIGTERM
+                    j["frozen"] = j["paused"] = False
+                    if os.path.exists(self._frozen_path(name)):
+                        os.remove(self._frozen_path(name))
+                j["expect_exit"] = True
+                j["driver"].signal(sig.SIGTERM)
+            # wait without the lock, so a wake or a tick can go ahead meanwhile; the stopping flag also survives Start clearing the hold
+            deadline = time.monotonic() + 15
+            while any(D.alive(p) for p in pids) and time.monotonic() < deadline:
+                time.sleep(0.2)
+            with self.lock:
+                if any(D.alive(p) for p in pids):
+                    j["driver"].signal(sig.SIGKILL)
+                    for p in pids:                    # a child left behind when its group leader already exited
+                        if D.alive(p):
+                            try:
+                                os.kill(p, sig.SIGKILL)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                self._check_exits()
+                j["state"], j["parked_at"] = PARKED, self.clock()
+            self.audit("stop", target=name)
+            return f"Stopped {name}; it's wound down until you press Start"
+        finally:
+            with self.lock:
+                j.pop("stopping", None)
 
     def clear_result(self, name):
         """Forget a finished job's exit (Start again), so the scheduler may start it once more."""
@@ -865,6 +880,8 @@ class Runner:
 
     def _resume_job(self, name, reason=""):
         j = self.job[name]
+        if j.get("stopping") or j.get("withdrawing"):
+            return False
         if not G.wait_free(self.gpu, j["spec"]["gpu_gib"], self.top["verify_free_s"], self.policy.reserve_gib):
             self.audit("resume_skipped", target=name, reason="driver does not show enough free memory")
             return False
@@ -893,6 +910,8 @@ class Runner:
         command finishes, so GapRunner learns it even if GapRunner itself was down at the time. A park (SIGTERM to
         the group) ends the wrapper too, so a parked job leaves no result and is started again later."""
         j, sp = self.job[name], self.job[name]["spec"]
+        if j.get("stopping") or j.get("withdrawing"):
+            return False
         res = self._result_path(name)
         if os.path.exists(res):
             os.remove(res)
@@ -997,7 +1016,7 @@ class Runner:
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
-                            sp["order"], sp["hold"], sp["window_only"], sp["enabled"], waiting, e["parked_at"],
+                            sp["order"], sp["hold"] or bool(e.get("stopping") or e.get("withdrawing")), sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
                             float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],

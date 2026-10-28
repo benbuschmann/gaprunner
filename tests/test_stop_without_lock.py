@@ -1,73 +1,96 @@
-"""Stop and withdraw wait for the job to exit without holding the transition lock: a wake, a tick or another action
-can go ahead meanwhile, and the stopped job is not started again."""
-import os
-import sys
+"""Stop and withdraw release the transition lock, but own the old run until the wait finishes."""
+import signal
 import tempfile
 import threading
-import time
 import unittest
+import time
+from unittest.mock import Mock, patch
 
-from fakes import FakeGpu, FakeVllm
-from gaprunner import config as C
-from gaprunner import drivers as D
-from gaprunner.runner import Runner
-
-
-def build(start_cmd):
-    d = tempfile.mkdtemp()
-    gpu = FakeGpu(100.0)
-    prod = FakeVllm(gpu, "prod", 60.0)
-    cfg = C.parse({
-        "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
-        "policy": {"reserve_gib": 0, "juggle_s": 0},
-        "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60}],
-        "job": [{"name": "slow", "driver": "restart", "gpu_gib": 10, "coexist": "share", "start_cmd": start_cmd}],
-    })
-    r = Runner(cfg, gpu=gpu)
-    with r.lock:
-        r._start("slow")
-    pids = r.job["slow"]["driver"].pids()
-    assert pids, "the job didn't start"
-    return r, pids
-
-
-def lock_free_while(r, busy, timeout=1.0):
-    """True if the lock can be taken while busy() is still true."""
-    time.sleep(0.5)                                   # let the stop send SIGTERM and start waiting
-    if not busy():
-        return False
-    got = r.lock.acquire(timeout=timeout)
-    if got:
-        r.lock.release()
-    return got and busy()
+from fakes import FakeGpu
+from gaprunner import config as C, runner as R, ui
 
 
 class StopWithoutLockTest(unittest.TestCase):
+    def exercise(self, withdraw=False, start=False):
+        gpu = FakeGpu(100.0)
+        r = R.Runner(C.parse({
+            "gaprunner": {"mode": "live", "state_dir": tempfile.mkdtemp()},
+            "service": [{"name": "prod", "driver": "fake", "upstream": "http://127.0.0.1:9",
+                         "listen": "127.0.0.1:0", "gpu_gib": 60, "gpu": gpu, "start": "hot"}],
+            "policy": {"reserve_gib": 0, "juggle_s": 0},
+            "job": [{"name": "slow", "driver": "fake", "gpu_gib": 10,
+                     "coexist": "share", "park_s": 0.1, "gpu": gpu, "start": "hot"}],
+        }), gpu=gpu)
+        j = r.job["slow"]
+        j["state"] = "hot"
+        waiting, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        now, alive, signals, errors, starts = [0.0], [True], [], [], []
+
+        def sleep(seconds):
+            waiting.set()
+            if not release.wait(3):
+                raise AssertionError("test did not release the stop wait")
+            now[0] += seconds
+
+        def send(sig):
+            signals.append((sig, now[0]))
+            if sig == signal.SIGKILL:
+                alive[0] = False
+                j["driver"].st = "parked"
+
+        def run():
+            try:
+                (r.remove_job if withdraw else r.stop_job)("slow")
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.object(R, "time", Mock(wraps=time, monotonic=lambda: now[0], sleep=sleep)), \
+             patch.object(R.D, "alive", side_effect=lambda pid: alive[0]), \
+             patch.object(j["driver"], "pids", side_effect=lambda: [123] if alive[0] else []), \
+             patch.object(j["driver"], "signal", side_effect=send), \
+             patch.object(j["driver"], "resume", side_effect=lambda: starts.append(True)):
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+            try:
+                self.assertTrue(waiting.wait(2), errors)
+                got = r.lock.acquire(timeout=0.2)
+                if got:
+                    r.lock.release()
+                self.assertTrue(got, "Stop holds the transition lock during its wait")
+                if start:
+                    ui.act(r, {"action": "set", "name": "slow", "field": "hold", "value": False})
+                    # A wake can park the old run while Stop is waiting on its remaining processes.
+                    j["driver"].st = "parked"
+                r.tick()
+                self.assertEqual(starts, [], "Start must wait until Stop/withdraw finishes")
+            finally:
+                release.set()
+                t.join(3)
+            self.assertFalse(t.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual([s for s, _ in signals], [signal.SIGTERM, signal.SIGKILL])
+            self.assertGreaterEqual(signals[-1][1], 15)
+            self.assertLess(signals[-1][1], 15.3)
+            self.assertFalse(alive[0])
+            if withdraw:
+                self.assertNotIn("slow", r.job)
+                self.assertNotIn("slow", C.queue_overrides(r.top))
+            else:
+                r.tick()
+                self.assertEqual(starts, [True] if start else [])
+
     def test_stop_waits_without_the_lock_and_still_kills(self):
-        r, pids = build("trap '' TERM; sleep 60")     # ignores SIGTERM: killed after 15 s
-        self.addCleanup(lambda: [os.kill(p, 9) for p in pids if D.alive(p)])
-        t = threading.Thread(target=r.stop_job, args=("slow",), daemon=True)
-        t.start()
-        self.assertTrue(lock_free_while(r, t.is_alive))
-        r.tick()                                      # a tick during the wait: it must not start the job again
-        t.join(20)
-        self.assertFalse(t.is_alive())
-        self.assertFalse(any(D.alive(p) for p in pids))
-        r.tick()
-        self.assertEqual(r.job["slow"]["state"], "parked")
-        self.assertFalse(r.job["slow"]["driver"].pids())
-        ev = [e["event"] for e in r.recent]
-        self.assertNotIn("start", ev[ev.index("stop"):])                       # not started again
+        self.exercise()
 
     def test_withdraw_waits_without_the_lock(self):
-        r, pids = build("trap 'sleep 2; exit 0' TERM; sleep 60")              # takes 2 s to exit on SIGTERM
-        self.addCleanup(lambda: [os.kill(p, 9) for p in pids if D.alive(p)])
-        t = threading.Thread(target=r.remove_job, args=("slow",), daemon=True)
-        t.start()
-        self.assertTrue(lock_free_while(r, t.is_alive))
-        t.join(20)
-        self.assertNotIn("slow", r.job)
-        self.assertFalse(any(D.alive(p) for p in pids))
+        self.exercise(withdraw=True)
+
+    def test_start_during_stop_waits_for_the_old_run(self):
+        self.exercise(start=True)
+
+    def test_start_during_withdraw_cannot_restart_the_job(self):
+        self.exercise(withdraw=True, start=True)
 
 
 if __name__ == "__main__":
