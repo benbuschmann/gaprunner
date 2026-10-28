@@ -7,7 +7,8 @@
   until GapRunner restarted. The job table is now read from a copy, and the gate always uncounts a request it counted.
 - If a service's `start_cmd` fails when an exclusive window ends, requests now get a 503 saying the service failed and
   is being restarted, and GapRunner runs `stop_cmd` and `start_cmd` again in the same tick. Before, the service was
-  left down with no explanation until a request had failed a wake.
+  left down with no explanation until a request had failed a wake. If the retry also fails, the 503 reason stays
+  visible and further restarts wait `dead_retry_s`.
 - Stop on the page and a Jobs API withdraw no longer hold GapRunner's lock while they wait (up to 15 s) for the job to
   exit. A request for a sleeping service, the tick and other actions go ahead meanwhile; the stopped job still isn't
   started again.

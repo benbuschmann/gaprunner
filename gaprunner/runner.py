@@ -367,13 +367,18 @@ class Runner:
                 if self.clock() - s["dead_since"] >= sp.get("dead_retry_s", 60):
                     s["dead_since"] = None                     # the next request tries a wake again
                 continue
+            if self.clock() < s.get("restart_after", 0):
+                continue
             for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                 self._park_job(jn, reason=f"{n} is restarting after a failed wake")
             self.audit("service_restart", target=n, reason=f"failed to wake ({s.get('last_error') or 'no answer'})")
             self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
             if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
                 s["starting_since"], s["state"] = self.clock(), STARTING
-            s["dead_since"] = None
+                s["dead_since"] = None
+                s.pop("restart_after", None)
+            else:
+                s["restart_after"] = self.clock() + sp.get("dead_retry_s", 60)
 
     def switch_engine(self, name, target, reason="by hand"):
         """Switch a service to another engine in a background thread. The old engine is stopped (its stop_cmd)
@@ -522,6 +527,8 @@ class Runner:
                 if s["driver"].state() == HOT:
                     self.audit("service_ready", target=n, seconds=round(self.clock() - s["starting_since"], 1))
                     s["starting_since"], s["state"], s["last_done"] = None, HOT, self.clock()
+                    s["dead_since"] = None
+                    s.pop("restart_after", None)
                     self._warm(n)
                 elif self.clock() - s["starting_since"] > sp.get("ready_timeout_s", 1800):
                     self.audit("service_start_timeout", target=n, note="still not ready; check it by hand")
