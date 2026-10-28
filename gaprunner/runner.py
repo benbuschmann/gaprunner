@@ -139,11 +139,12 @@ class Runner:
 
     def remove_job(self, name):
         """Take a job out (the Jobs API's withdraw): stopped first if it holds anything, then forgotten."""
-        with self.lock:                       # held throughout, so the scheduler can't start it in between
-            if name not in self.job:
-                raise ValueError("no such job")
-            if self.job[name]["driver"].pids() or self.job[name]["proc"] is not None:
-                self.stop_job(name)
+        if name not in self.job:
+            raise ValueError("no such job")
+        # stop_job holds it in the queue file before it looks for processes, so the scheduler can't start it in
+        # between, and a job that starts at that moment is stopped, not lost; its wait doesn't hold the lock
+        self.stop_job(name)
+        with self.lock:
             self.job.pop(name, None)
             self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
             q = C.read_queue(self.top)
@@ -220,9 +221,11 @@ class Runner:
                     os.remove(self._frozen_path(name))
             j["expect_exit"] = True
             j["driver"].signal(sig.SIGTERM)
-            deadline = time.monotonic() + 15
-            while any(D.alive(p) for p in pids) and time.monotonic() < deadline:
-                time.sleep(0.2)
+        # wait without the lock, so a wake or a tick can go ahead meanwhile; the hold above keeps it from restarting
+        deadline = time.monotonic() + 15
+        while any(D.alive(p) for p in pids) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        with self.lock:
             if any(D.alive(p) for p in pids):
                 j["driver"].signal(sig.SIGKILL)
                 for p in pids:                    # a child left behind when its group leader already exited
