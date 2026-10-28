@@ -25,7 +25,7 @@
 - Changes to the queue file from the page, Stop, `max_hours` and the Jobs API are made one at a time. Two at the same
   moment could lose one of them (a lost Stop let the job start again) or fail with "No such file or directory".
 - The gate answers 400 for a `Content-Length` that isn't a whole number, 413 for a body over 64 MiB and 411 for a
-  chunked body, and drops a client that sends nothing for 60 s. Before, the first dropped the connection with no
+  chunked body. Ambiguous lengths and truncated bodies also get 400. It drops a client that sends nothing for 60 s. Before, the first dropped the connection with no
   answer, `-1` hung, and a silent client held a thread for good.
 
 ## 0.28.0

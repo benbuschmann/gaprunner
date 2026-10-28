@@ -50,19 +50,27 @@ def make_handler(runner, name):
             self.end_headers()
             self.wfile.write(body)
 
+        def _bad_body(self, code, message):
+            self.close_connection = True
+            return self._send(code, json.dumps({"error": {"message": message, "type": "bad_request"}}).encode(),
+                              extra=[("Connection", "close")])
+
         def _proxy(self):
-            if self.path == "/gaprunner/state":
-                return self._send(200, json.dumps(runner.status(), default=str).encode())
-            raw = self.headers.get("Content-Length") or "0"
-            bad = ((411, "send the request body with a Content-Length") if self.headers.get("Transfer-Encoding") else
-                   (400, "Content-Length must be a whole number of bytes") if not raw.isdigit() else
-                   (413, f"at most {MAX_BODY} bytes") if int(raw) > MAX_BODY else None)
-            if bad:                           # its body is unread: close the connection rather than parse it as a request
-                self.close_connection = True
-                return self._send(bad[0], json.dumps({"error": {"message": bad[1], "type": "bad_request"}}).encode(),
-                                  extra=[("Connection", "close")])
+            lengths = self.headers.get_all("Content-Length", [])
+            raw = lengths[0].strip() if lengths else "0"
+            if "Transfer-Encoding" in self.headers:
+                return self._bad_body(411, "send the request body with a Content-Length")
+            if len(lengths) > 1 or not raw.isascii() or not raw.isdigit():
+                return self._bad_body(400, "Content-Length must be a whole number of bytes")
+            raw = raw.lstrip("0") or "0"
+            if len(raw) > len(str(MAX_BODY)) or int(raw) > MAX_BODY:
+                return self._bad_body(413, f"at most {MAX_BODY} bytes")
             length = int(raw)
             body = self.rfile.read(length) if length else None
+            if length and len(body) != length:
+                return self._bad_body(400, "request body ended before Content-Length bytes arrived")
+            if self.path == "/gaprunner/state":
+                return self._send(200, json.dumps(runner.status(), default=str).encode())
             job, path = None, self.path
             if path.startswith("/_job/"):
                 job, _, rest = path[len("/_job/"):].partition("/")
