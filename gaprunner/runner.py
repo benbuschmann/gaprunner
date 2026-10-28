@@ -510,8 +510,11 @@ class Runner:
             elif not ex and (s["stopped"] or s["stopping"]):
                 for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                     self._park_job(jn, reason="GPU window ended")
-                if s["stopped"] and self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
-                    s["starting_since"], s["state"] = self.clock(), STARTING
+                if s["stopped"]:
+                    if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
+                        s["starting_since"], s["state"] = self.clock(), STARTING
+                    else:
+                        s["dead_since"] = self.clock()   # requests get a 503 saying why; _recover restarts it
                 s["stopped"] = s["stopping"] = False
             if s["starting_since"] is not None:
                 if s["driver"].state() == HOT:
