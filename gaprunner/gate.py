@@ -57,10 +57,10 @@ def make_handler(runner, name):
                 job, _, rest = path[len("/_job/"):].partition("/")
                 path = "/" + rest
             probe = urllib.parse.urlparse(path).path.rstrip("/") in passive
-            if not probe:
-                runner.request_start(name, job)
             sent, conn = False, None
             try:
+                if not probe:
+                    runner.request_start(name, job)     # inside the try: whatever happens, request_end uncounts it
                 if not probe and not runner.ensure_hot(name):
                     why = runner.unavailable(name)
                     msg = why or "service is waking; retry shortly"

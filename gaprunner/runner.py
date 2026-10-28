@@ -282,7 +282,7 @@ class Runner:
                 self._activity(name, "start")
             s["inflight"] += 1
         if first and self.live:
-            for jn, j in self.job.items():
+            for jn, j in list(self.job.items()):      # a copy: the Jobs API may add or remove a job meanwhile
                 if self.coexist_of(jn) == "yield" and j["state"] == HOT and not j["paused"] and not j["frozen"]:
                     j["driver"].pause()
                     j["paused"] = True
@@ -592,7 +592,7 @@ class Runner:
         from . import progress
         now = self.clock()
         q = C.queue_overrides(self.top)
-        for n, j in self.job.items():
+        for n, j in list(self.job.items()):
             running = j["state"] == HOT and not j["paused"] and not j["frozen"]
             held = (q[n]["hold"] if n in q else bool(j["spec"].get("hold"))) or os.path.exists(self.drain_path)   # Wind down all: like Wind down on each
             self._wind_down_at_saved_point(n, j, held, now)
@@ -988,7 +988,7 @@ class Runner:
                             now - e["warm_since"] < e["spec"].get("warm_hold_max_s", 300))
                     for n, e in self.svc.items()]
         jobs = []
-        for n, e in self.job.items():
+        for n, e in list(self.job.items()):
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
@@ -1057,7 +1057,7 @@ class Runner:
         now = self.clock()
         for e in self.svc.values():
             speed.update(e, speed.url_of(e["spec"]), now, e["state"] == HOT)
-        for j in self.job.values():
+        for j in list(self.job.values()):
             speed.update(j, speed.url_of({"metrics_url": j["spec"].get("metrics_url")}), now,
                          j["state"] == HOT and not j["frozen"])
 
@@ -1108,7 +1108,7 @@ class Runner:
         reading = self.gpu.read()
         now = self.clock()
         gib, measured, stow = self.holders(reading)
-        for n, e in self.job.items():           # each run's GPU peak, shown beside the recipe's figure
+        for n, e in list(self.job.items()):     # each run's GPU peak, shown beside the recipe's figure
             if e["state"] == HOT and measured.get(n) and gib.get(n):
                 e["gpu_peak_now"] = max(e.get("gpu_peak_now", 0.0), gib[n])
         busy = {n: bool(e["inflight"]) for n, e in self.svc.items()}
@@ -1203,7 +1203,7 @@ class Runner:
         now = self.clock()
         snap = self.snapshot()
         why = explain(snap, {n: e["gaps"] for n, e in self.svc.items()}, self.policy)
-        for n, e in self.job.items():
+        for n, e in list(self.job.items()):
             if e["frozen"]:
                 why[n] = ("frozen", "paused by you where it was; it keeps its memory. Resume continues it")
         q = C.queue_overrides(self.top)
@@ -1241,7 +1241,9 @@ class Runner:
                                   "p_idle_30s_more": m.p_continue(idle, 30), "median_more_idle_s": m.median_remaining(idle),
                                   "survival": [[x, m.p_continue(x, 30)] for x in (0, 5, 10, 20, 30, 60, 120, 300, 600)]}
         for j in snap.jobs:
-            e = self.job[j.name]
+            e = self.job.get(j.name)
+            if e is None:                         # withdrawn since the snapshot
+                continue
             out["jobs"][j.name] = {"state": e["state"], "order": j.order, "hold": j.hold, "window_only": j.window_only,
                                    "coexist": j.coexist, "paused": e["paused"], "running": e["spec"]["running"],
                                    "parked": e["spec"]["parked"], "cpu_gib_now": _rss_gib(e["driver"].pids()),
