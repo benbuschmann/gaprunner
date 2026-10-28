@@ -8,6 +8,8 @@ import unittest
 from fakes import FakeGpu, FakeVllm
 from gaprunner import config as C
 from gaprunner.runner import Runner
+from gaprunner.costs import CostBook
+from gaprunner.gaps import GapModel
 
 
 def config(d, prod):
@@ -31,6 +33,33 @@ class BadStateFileTest(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.gpu = FakeGpu(100.0)
         self.prod = FakeVllm(self.gpu, "prod", 60.0)
+        self.addCleanup(self.prod.srv.server_close)
+        self.addCleanup(self.prod.srv.shutdown)
+
+    def test_wrong_field_types_are_not_accepted_as_state(self):
+        r = Runner(config(self.d, self.prod), gpu=self.gpu)
+        for bad in ({"until": []}, {"until": {}}, {"until": False}, {"until": "nan"},
+                    {"until": 0, "exclusive": "false"}):
+            with self.subTest(window=bad):
+                write(r.top["window_file"], bad)
+                self.assertIsNone(C.window_file_info(r.top))
+                self.assertFalse(C.window_open(r.top))
+        write(r.top["queue_file"], {"jobs": [{"name": ["bench"]}, {"name": {}}, {"name": "bench", "hold": True}]})
+        self.assertEqual(list(C.queue_overrides(r.top)), ["bench"])
+        r.status()
+
+    def test_bad_measurement_values_fall_back_to_seeds(self):
+        path = os.path.join(self.d, "costs.json")
+        for bad in ("slow", ["slow"], {"slow": 1}, [None]):
+            with self.subTest(samples=bad):
+                write(path, {"samples": {"bench:park": bad}})
+                book = CostBook(path)
+                book.seed("bench", "park", 5)
+                self.assertEqual(book.get("bench", "park"), (5, False))
+        path = os.path.join(self.d, "gaps-prod.json")
+        for bad in ("123", {"123": 1}):
+            write(path, {"gaps": bad})
+            self.assertEqual(len(GapModel.load(path)), 0)
 
     def test_a_window_file_of_the_wrong_shape_is_no_window(self):
         for bad in ({"until": "06:00"}, [], "tomorrow"):

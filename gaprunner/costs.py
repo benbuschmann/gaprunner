@@ -4,6 +4,7 @@ Operations: "park" (free the GPU), "resume" (back on the GPU and ready). Seeds c
 `resume_s`); every real transition GapRunner performs is recorded, and the median of the last `keep` samples wins.
 """
 import json
+import math
 import os
 import statistics
 
@@ -15,8 +16,12 @@ class CostBook:
         if path:
             try:
                 with open(path) as f:
-                    self.samples = {k: list(v)[-keep:] for k, v in json.load(f).get("samples", {}).items()}
-            except (FileNotFoundError, ValueError, AttributeError, TypeError):
+                    samples = json.load(f).get("samples", {})
+                if any(not isinstance(v, list) or any(type(x) not in (int, float) or not math.isfinite(x)
+                                                      for x in v) for v in samples.values()):
+                    raise ValueError("samples must be lists of numbers")
+                self.samples = {k: v[-keep:] for k, v in samples.items()}
+            except (FileNotFoundError, ValueError, AttributeError, TypeError, OverflowError):
                 pass
 
     @staticmethod

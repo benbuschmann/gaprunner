@@ -70,6 +70,9 @@ class GapModel:
     def load(cls, path, **kw):
         try:
             with open(path) as f:
-                return cls(json.load(f).get("gaps", []), **kw)
+                gaps = json.load(f).get("gaps", [])
+            if not isinstance(gaps, list):
+                return cls(**kw)
+            return cls(gaps, **kw)
         except (FileNotFoundError, ValueError, AttributeError, TypeError):
             return cls(**kw)
