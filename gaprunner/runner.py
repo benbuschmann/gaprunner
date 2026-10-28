@@ -40,6 +40,7 @@ class Runner:
         self.status_path = os.path.join(self.top["state_dir"], "status.json")
         self.gpu = gpu or G.NvidiaSmi(self.top["gpu_index"])
         self.lock = threading.RLock()
+        self.queue_lock = threading.RLock()   # around each read-modify-write of the queue file; taken after self.lock
         self.costs = CostBook(os.path.join(self.top["state_dir"], "costs.json"))
         from . import servers
         self.finder, self.model_servers = servers.Finder(), []
@@ -131,11 +132,12 @@ class Runner:
             self.cfg["jobs"].append(spec)
             if queue_at in ("top", "bottom") and not self.readonly:
                 from .ui import ordered_queue
-                q = [x for x in ordered_queue(self) if x["name"] != spec["name"]]
-                row = {"name": spec["name"], "hold": bool(spec["hold"]), "window_only": bool(spec["window_only"]),
-                       "added": round(self.clock(), 1), **({"tags": spec["tags"]} if spec.get("tags") else {})}
-                q.insert(0 if queue_at == "top" else len(q), row)
-                C.write_queue(self.top, {"jobs": q})
+                with self.queue_lock:
+                    q = [x for x in ordered_queue(self) if x["name"] != spec["name"]]
+                    row = {"name": spec["name"], "hold": bool(spec["hold"]), "window_only": bool(spec["window_only"]),
+                           "added": round(self.clock(), 1), **({"tags": spec["tags"]} if spec.get("tags") else {})}
+                    q.insert(0 if queue_at == "top" else len(q), row)
+                    C.write_queue(self.top, {"jobs": q})
         return spec
 
     def remove_job(self, name):
@@ -148,9 +150,10 @@ class Runner:
         with self.lock:
             self.job.pop(name, None)
             self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
-            q = C.read_queue(self.top)
-            q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
-            C.write_queue(self.top, q)
+            with self.queue_lock:
+                q = C.read_queue(self.top)
+                q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
+                C.write_queue(self.top, q)
 
     def status_of(self, name):
         """{"word", "why"} for one job, as /api/status says it."""
@@ -187,13 +190,14 @@ class Runner:
             return f"Resumed {name} from where it paused"
 
     def _set_hold(self, name, on):
-        q = C.read_queue(self.top)
-        if name not in [x.get("name") for x in q.get("jobs", [])]:
-            q.setdefault("jobs", []).append({"name": name})
-        for x in q["jobs"]:
-            if x.get("name") == name:
-                x["hold"] = on
-        C.write_queue(self.top, q)
+        with self.queue_lock:
+            q = C.read_queue(self.top)
+            if name not in [x.get("name") for x in q.get("jobs", [])]:
+                q.setdefault("jobs", []).append({"name": name})
+            for x in q["jobs"]:
+                if x.get("name") == name:
+                    x["hold"] = on
+            C.write_queue(self.top, q)
 
     def coexist_of(self, name):
         """The job's placement, with a change made on the page (queue override) winning over the recipe."""
@@ -204,13 +208,7 @@ class Runner:
         again until someone presses Start. A resumable job continues from its last checkpoint then."""
         import signal as sig
         j = self.job[name]
-        q = C.read_queue(self.top)
-        if name not in [x.get("name") for x in q.get("jobs", [])]:
-            q.setdefault("jobs", []).append({"name": name})
-        for x in q["jobs"]:
-            if x.get("name") == name:
-                x["hold"] = True
-        C.write_queue(self.top, q)
+        self._set_hold(name, True)
         with self.lock:
             pids = j["driver"].pids()
             if not pids:
@@ -612,14 +610,7 @@ class Runner:
             self._track_saves(n, j, running, now)
             cap = j["spec"].get("max_hours")
             if cap and running and j["run_s"] - j.get("cap_base", 0.0) >= float(cap) * 3600:
-                q = C.read_queue(self.top)
-                names = [x.get("name") for x in q.get("jobs", [])]
-                if n not in names:
-                    q.setdefault("jobs", []).append({"name": n})
-                for x in q["jobs"]:
-                    if x.get("name") == n:
-                        x["hold"] = True
-                C.write_queue(self.top, q)
+                self._set_hold(n, True)
                 with self.lock:
                     self._park_job(n, reason=f"reached max_hours = {cap}")
                 j["cap_base"] = j["run_s"]

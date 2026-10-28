@@ -207,6 +207,12 @@ def act(runner, body):
         return runner.start_calibration(str(body.get("name", "")), float(body.get("warm_s", 60)), int(body.get("cycles", 2)))
     if a == "bulk":
         return bulk(runner, body)
+    with runner.queue_lock:                   # one read-modify-write of the queue file at a time
+        return _edit_queue(runner, body)
+
+
+def _edit_queue(runner, body):
+    top, a = runner.top, body.get("action")
     q = ordered_queue(runner)
     if a == "reorder":
         # the names in their new order (a dragged block, or the whole list); everything else keeps its relative order
