@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.29.0
+
+- A job added or withdrawn through the Jobs API at the moment a request arrived could leave that request counted
+  forever. The service then never looked idle again: no parks, no gap jobs, and paused `yield` jobs stayed paused
+  until GapRunner restarted. The job table is now read from a copy, and the gate always uncounts a request it counted.
+- If a service's `start_cmd` fails when an exclusive window ends, requests now get a 503 saying the service failed and
+  is being restarted, and GapRunner runs `stop_cmd` and `start_cmd` again in the same tick. Before, the service was
+  left down with no explanation until a request had failed a wake. If the retry also fails, the 503 reason stays
+  visible and further restarts wait `dead_retry_s`.
+- Stop on the page and a Jobs API withdraw no longer hold GapRunner's lock while they wait (up to 15 s) for the job to
+  exit. A request for a sleeping service, the tick and other actions go ahead meanwhile; the stopped job still isn't
+  started again. Start during the wait takes effect only after Stop finishes; a withdrawn job cannot restart.
+- A governor app that is still running 10 s after its `grace_s` (30 s by default) once its reservation was revoked
+  now counts as stuck right away, instead of after `timeout_s` (120 s by default). The tick's parks hold the lock
+  while they wait, so a request for a sleeping service waited that long too.
+- A state file that holds valid JSON of the wrong shape is treated as empty. A WINDOW file such as
+  `{"until": "06:00"}` used to make every tick fail and drop every request that had to wake a sleeping service; it now
+  counts as no window and is logged once as `window_file_ignored`. A wrong-shaped `queue.json` reads as an empty
+  queue, and a wrong-shaped `costs.json`, `gaps-<service>.json` or `submitted.json` no longer stops GapRunner from
+  starting.
+- A job's own request to a service (`/_job/<name>/...`) that arrives just as the tick decides to park the service now
+  keeps it awake, as an ordinary request does.
+- Changes to the queue file from the page, Stop, `max_hours` and the Jobs API are made one at a time. Two at the same
+  moment could lose one of them (a lost Stop let the job start again) or fail with "No such file or directory".
+- The gate answers 400 for a `Content-Length` that isn't a whole number, 413 for a body over 64 MiB and 411 for a
+  chunked body. Ambiguous lengths and truncated bodies also get 400. It drops a client that sends nothing for 60 s. Before, the first dropped the connection with no
+  answer, `-1` hung, and a silent client held a thread for good.
+
 ## 0.28.0
 
 - `progress_every_s`: how often a job's `progress_cmd` is read (30 s, as before, unless set; at least 1 s). An app whose

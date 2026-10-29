@@ -17,7 +17,7 @@ with `~`. Every command field runs through `sh -c` with GapRunner's user and per
 | `verify_free_s` | `30.0` | how long to wait for the driver to show memory free before starting or waking something |
 | `kill_stuck_jobs` | `true` | stop a job hard when it won't step aside in time, so a service can wake |
 | `queue_file` | `<state_dir>/queue.json` | job order and the page's changes (Start/Wind down, Queue, tags, ...) |
-| `window_file` | `<state_dir>/WINDOW` | the page's slow-wake / no-service period: present while open (JSON `{"until", "exclusive"}`) |
+| `window_file` | `<state_dir>/WINDOW` | the page's slow-wake / no-service period: present while open (JSON `{"until": epoch seconds or 0 for open-ended, "exclusive": true/false}`; a file of another shape counts as no window and is logged once as `window_file_ignored`) |
 | `windows` | `[]` | daily slow-wake periods, local time, e.g. `["01:00-06:00"]` |
 | `pause_file` | `<state_dir>/PAUSE` | the kill switch: while it exists, services stay awake and every job steps aside |
 | `ui_listen` | none (no page) | the web page's address; keep it on loopback or a private network |
@@ -77,7 +77,7 @@ A model server GapRunner protects. Required: `name`, `listen`, and either the en
 | `warm_cmd` | none | run in the background after the engine wakes or starts, to bring it back to full speed (e.g. read tables that live in the page cache back into memory); requests are answered meanwhile, and the page shows it as warming up. Output goes to `<state_dir>/service-<name>-warm.log` |
 | `warm_hold_max_s` | `300` | the service isn't put to sleep while its `warm_cmd` runs, for at most this long |
 | `restart_on_failed_wake` | `true` | when a wake fails, requests get a 503 at once and GapRunner restarts the service with `stop_cmd` then `start_cmd` (if it has them) |
-| `dead_retry_s` | `60` | without stop and start commands: how long after a failed wake requests fail fast before a wake is tried again |
+| `dead_retry_s` | `60` | delay before retrying a failed restart command; without stop and start commands, how long after a failed wake requests fail fast before a wake is tried again |
 | `pids_cmd`, `pgrep`, `pid_file` | none | how to find its processes (for memory and "unknown use"); `pids_cmd` suits containers |
 | `metrics_url` | `<upstream>/metrics` for vllm/sglang | Prometheus metrics for the page's engine stats |
 
@@ -114,7 +114,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `health_cmd`, `health_grace_s` | none, `900` | non-zero exit = unhealthy (after the grace period at start) |
 | `stall_after_s` | `1800` | flag it as stuck when neither its progress nor its log has moved for this long |
 | `metrics_url` | none | Prometheus metrics of the job's own server, for speed and engine stats |
-| `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke |
+| `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke (GapRunner waits at most `grace_s` + 10 s, or `timeout_s` if lower, for a revoked app to step aside) |
 | `bind_timeout_s` | `30` | governor jobs: an admitted app that hasn't started its command by then is revoked |
 | `comfy_url`, `idle_release_s` | none, `600` | governor jobs: the app's ComfyUI, to record each prompt it runs; revoke after this long with nothing to run (0 = never) |
 | driver fields | | `url`, `headers` (vllm, sglang, park-protocol); `park_cmd`, `resume_cmd`, `state_cmd` (command); `pid_file`, `pids`, `pids_cmd`, `pgrep`, `sudo`, `cuda_checkpoint` (cuda-checkpoint and adopted jobs) |

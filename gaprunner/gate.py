@@ -17,6 +17,8 @@ import http.server
 import json
 import urllib.parse
 
+MAX_BODY = 64 << 20          # 64 MiB: far above any chat request; a bound on what one request holds in memory
+
 PASSIVE_DEFAULT = ("/health", "/v1/models", "/metrics", "/version", "/is_sleeping", "/ping")
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
@@ -34,6 +36,7 @@ def make_handler(runner, name):
 
     class Gate(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        timeout = 60                  # a client that stops sending is dropped (the engine's answer has request_timeout_s)
 
         def log_message(self, fmt, *args):
             pass
@@ -47,20 +50,36 @@ def make_handler(runner, name):
             self.end_headers()
             self.wfile.write(body)
 
+        def _bad_body(self, code, message):
+            self.close_connection = True
+            return self._send(code, json.dumps({"error": {"message": message, "type": "bad_request"}}).encode(),
+                              extra=[("Connection", "close")])
+
         def _proxy(self):
+            lengths = self.headers.get_all("Content-Length", [])
+            raw = lengths[0].strip() if lengths else "0"
+            if "Transfer-Encoding" in self.headers:
+                return self._bad_body(411, "send the request body with a Content-Length")
+            if len(lengths) > 1 or not raw.isascii() or not raw.isdigit():
+                return self._bad_body(400, "Content-Length must be a whole number of bytes")
+            raw = raw.lstrip("0") or "0"
+            if len(raw) > len(str(MAX_BODY)) or int(raw) > MAX_BODY:
+                return self._bad_body(413, f"at most {MAX_BODY} bytes")
+            length = int(raw)
+            body = self.rfile.read(length) if length else None
+            if length and len(body) != length:
+                return self._bad_body(400, "request body ended before Content-Length bytes arrived")
             if self.path == "/gaprunner/state":
                 return self._send(200, json.dumps(runner.status(), default=str).encode())
-            length = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(length) if length else None
             job, path = None, self.path
             if path.startswith("/_job/"):
                 job, _, rest = path[len("/_job/"):].partition("/")
                 path = "/" + rest
             probe = urllib.parse.urlparse(path).path.rstrip("/") in passive
-            if not probe:
-                runner.request_start(name, job)
             sent, conn = False, None
             try:
+                if not probe:
+                    runner.request_start(name, job)     # inside the try: whatever happens, request_end uncounts it
                 if not probe and not runner.ensure_hot(name):
                     why = runner.unavailable(name)
                     msg = why or "service is waking; retry shortly"

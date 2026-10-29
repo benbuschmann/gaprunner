@@ -40,6 +40,7 @@ class Runner:
         self.status_path = os.path.join(self.top["state_dir"], "status.json")
         self.gpu = gpu or G.NvidiaSmi(self.top["gpu_index"])
         self.lock = threading.RLock()
+        self.queue_lock = threading.RLock()   # around each read-modify-write of the queue file; taken after self.lock
         self.costs = CostBook(os.path.join(self.top["state_dir"], "costs.json"))
         from . import servers
         self.finder, self.model_servers = servers.Finder(), []
@@ -85,6 +86,7 @@ class Runner:
         self.live_rows = collections.deque(maxlen=720)                                 # 5 s rows, last hour
         self.activity = collections.deque(_tail_jsonl(self.activity_path, self.clock() - 86400))
         self.last_minute = 0
+        self.window_ignored = None            # mtime of a WINDOW file already reported as unreadable
         self.submissions.load()               # jobs submitted through the Jobs API, back in the queue
         if not readonly:
             _trim_jsonl(self.history_path, self.clock() - HISTORY_KEEP_S)
@@ -130,25 +132,35 @@ class Runner:
             self.cfg["jobs"].append(spec)
             if queue_at in ("top", "bottom") and not self.readonly:
                 from .ui import ordered_queue
-                q = [x for x in ordered_queue(self) if x["name"] != spec["name"]]
-                row = {"name": spec["name"], "hold": bool(spec["hold"]), "window_only": bool(spec["window_only"]),
-                       "added": round(self.clock(), 1), **({"tags": spec["tags"]} if spec.get("tags") else {})}
-                q.insert(0 if queue_at == "top" else len(q), row)
-                C.write_queue(self.top, {"jobs": q})
+                with self.queue_lock:
+                    q = [x for x in ordered_queue(self) if x["name"] != spec["name"]]
+                    row = {"name": spec["name"], "hold": bool(spec["hold"]), "window_only": bool(spec["window_only"]),
+                           "added": round(self.clock(), 1), **({"tags": spec["tags"]} if spec.get("tags") else {})}
+                    q.insert(0 if queue_at == "top" else len(q), row)
+                    C.write_queue(self.top, {"jobs": q})
         return spec
 
     def remove_job(self, name):
         """Take a job out (the Jobs API's withdraw): stopped first if it holds anything, then forgotten."""
-        with self.lock:                       # held throughout, so the scheduler can't start it in between
+        with self.lock:
             if name not in self.job:
                 raise ValueError("no such job")
-            if self.job[name]["driver"].pids() or self.job[name]["proc"] is not None:
-                self.stop_job(name)
-            self.job.pop(name, None)
-            self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
-            q = C.read_queue(self.top)
-            q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
-            C.write_queue(self.top, q)
+            j = self.job[name]
+            if j.get("stopping") or j.get("withdrawing"):
+                raise ValueError(f"{name} is already stopping")
+            j["withdrawing"] = True
+        try:
+            self.stop_job(name)
+            with self.lock:
+                self.job.pop(name, None)
+                self.cfg["jobs"] = [j for j in self.cfg["jobs"] if j["name"] != name]
+                with self.queue_lock:
+                    q = C.read_queue(self.top)
+                    q["jobs"] = [x for x in q.get("jobs", []) if x.get("name") != name]
+                    C.write_queue(self.top, q)
+        finally:
+            with self.lock:
+                j.pop("withdrawing", None)
 
     def status_of(self, name):
         """{"word", "why"} for one job, as /api/status says it."""
@@ -185,56 +197,61 @@ class Runner:
             return f"Resumed {name} from where it paused"
 
     def _set_hold(self, name, on):
-        q = C.read_queue(self.top)
-        if name not in [x.get("name") for x in q.get("jobs", [])]:
-            q.setdefault("jobs", []).append({"name": name})
-        for x in q["jobs"]:
-            if x.get("name") == name:
-                x["hold"] = on
-        C.write_queue(self.top, q)
+        with self.queue_lock:
+            q = C.read_queue(self.top)
+            if name not in [x.get("name") for x in q.get("jobs", [])]:
+                q.setdefault("jobs", []).append({"name": name})
+            for x in q["jobs"]:
+                if x.get("name") == name:
+                    x["hold"] = on
+            C.write_queue(self.top, q)
 
     def coexist_of(self, name):
         """The job's placement, with a change made on the page (queue override) winning over the recipe."""
-        return C.queue_overrides(self.top).get(name, {}).get("coexist") or self.job[name]["spec"]["coexist"]
+        return C.queue_overrides(self.top).get(name, {}).get("coexist") or self.job.get(name, {}).get("spec", {}).get("coexist", "no")
 
     def stop_job(self, name):
         """Stop: end the job now (SIGTERM to its processes, SIGKILL after 15 s) and wind it down, so it doesn't start
         again until someone presses Start. A resumable job continues from its last checkpoint then."""
         import signal as sig
-        j = self.job[name]
-        q = C.read_queue(self.top)
-        if name not in [x.get("name") for x in q.get("jobs", [])]:
-            q.setdefault("jobs", []).append({"name": name})
-        for x in q["jobs"]:
-            if x.get("name") == name:
-                x["hold"] = True
-        C.write_queue(self.top, q)
         with self.lock:
-            pids = j["driver"].pids()
-            if not pids:
-                return f"{name} wasn't running; it's wound down until you press Start"
-            if j["frozen"] or j["paused"]:
-                j["driver"].unpause()            # a stopped (SIGSTOP) process can't act on SIGTERM
-                j["frozen"] = j["paused"] = False
-                if os.path.exists(self._frozen_path(name)):
-                    os.remove(self._frozen_path(name))
-            j["expect_exit"] = True
-            j["driver"].signal(sig.SIGTERM)
+            j = self.job[name]
+            if j.get("stopping"):
+                raise ValueError(f"{name} is already stopping")
+            self._set_hold(name, True)
+            j["stopping"] = True
+        try:
+            with self.lock:
+                pids = j["driver"].pids()
+                if not pids:
+                    return f"{name} wasn't running; it's wound down until you press Start"
+                if j["frozen"] or j["paused"]:
+                    j["driver"].unpause()            # a stopped (SIGSTOP) process can't act on SIGTERM
+                    j["frozen"] = j["paused"] = False
+                    if os.path.exists(self._frozen_path(name)):
+                        os.remove(self._frozen_path(name))
+                j["expect_exit"] = True
+                j["driver"].signal(sig.SIGTERM)
+            # wait without the lock, so a wake or a tick can go ahead meanwhile; the stopping flag also survives Start clearing the hold
             deadline = time.monotonic() + 15
             while any(D.alive(p) for p in pids) and time.monotonic() < deadline:
                 time.sleep(0.2)
-            if any(D.alive(p) for p in pids):
-                j["driver"].signal(sig.SIGKILL)
-                for p in pids:                    # a child left behind when its group leader already exited
-                    if D.alive(p):
-                        try:
-                            os.kill(p, sig.SIGKILL)
-                        except (ProcessLookupError, PermissionError):
-                            pass
-            self._check_exits()
-            j["state"], j["parked_at"] = PARKED, self.clock()
-        self.audit("stop", target=name)
-        return f"Stopped {name}; it's wound down until you press Start"
+            with self.lock:
+                if any(D.alive(p) for p in pids):
+                    j["driver"].signal(sig.SIGKILL)
+                    for p in pids:                    # a child left behind when its group leader already exited
+                        if D.alive(p):
+                            try:
+                                os.kill(p, sig.SIGKILL)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                self._check_exits()
+                j["state"], j["parked_at"] = PARKED, self.clock()
+            self.audit("stop", target=name)
+            return f"Stopped {name}; it's wound down until you press Start"
+        finally:
+            with self.lock:
+                j.pop("stopping", None)
 
     def clear_result(self, name):
         """Forget a finished job's exit (Start again), so the scheduler may start it once more."""
@@ -275,14 +292,14 @@ class Runner:
             return
         with self.count_lock:
             first = not any(e["inflight"] for e in self.svc.values())
-            if s["inflight"] == 0:
+            s["inflight"] += 1                 # count before any bookkeeping that can raise
+            if s["inflight"] == 1:
                 gap = self.clock() - s["last_done"]
                 if gap > 0:
                     s["gaps"].add(gap)
                 self._activity(name, "start")
-            s["inflight"] += 1
         if first and self.live:
-            for jn, j in self.job.items():
+            for jn, j in list(self.job.items()):      # a copy: the Jobs API may add or remove a job meanwhile
                 if self.coexist_of(jn) == "yield" and j["state"] == HOT and not j["paused"] and not j["frozen"]:
                     j["driver"].pause()
                     j["paused"] = True
@@ -365,13 +382,18 @@ class Runner:
                 if self.clock() - s["dead_since"] >= sp.get("dead_retry_s", 60):
                     s["dead_since"] = None                     # the next request tries a wake again
                 continue
+            if self.clock() < s.get("restart_after", 0):
+                continue
             for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                 self._park_job(jn, reason=f"{n} is restarting after a failed wake")
             self.audit("service_restart", target=n, reason=f"failed to wake ({s.get('last_error') or 'no answer'})")
             self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
             if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
                 s["starting_since"], s["state"] = self.clock(), STARTING
-            s["dead_since"] = None
+                s["dead_since"] = None
+                s.pop("restart_after", None)
+            else:
+                s["restart_after"] = self.clock() + sp.get("dead_retry_s", 60)
 
     def switch_engine(self, name, target, reason="by hand"):
         """Switch a service to another engine in a background thread. The old engine is stopped (its stop_cmd)
@@ -510,13 +532,18 @@ class Runner:
             elif not ex and (s["stopped"] or s["stopping"]):
                 for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                     self._park_job(jn, reason="GPU window ended")
-                if s["stopped"] and self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
-                    s["starting_since"], s["state"] = self.clock(), STARTING
+                if s["stopped"]:
+                    if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
+                        s["starting_since"], s["state"] = self.clock(), STARTING
+                    else:
+                        s["dead_since"] = self.clock()   # requests get a 503 saying why; _recover restarts it
                 s["stopped"] = s["stopping"] = False
             if s["starting_since"] is not None:
                 if s["driver"].state() == HOT:
                     self.audit("service_ready", target=n, seconds=round(self.clock() - s["starting_since"], 1))
                     s["starting_since"], s["state"], s["last_done"] = None, HOT, self.clock()
+                    s["dead_since"] = None
+                    s.pop("restart_after", None)
                     self._warm(n)
                 elif self.clock() - s["starting_since"] > sp.get("ready_timeout_s", 1800):
                     self.audit("service_start_timeout", target=n, note="still not ready; check it by hand")
@@ -567,19 +594,22 @@ class Runner:
     def tags_of(self, name):
         """Tags set in the UI, else the recipe's `tags`."""
         t = C.queue_overrides(self.top).get(name, {}).get("tags")
-        return list(self.job[name]["spec"].get("tags", []) if t is None else t)
+        return list(self.job.get(name, {}).get("spec", {}).get("tags", []) if t is None else t)
 
     def after_of(self, name):
         """The jobs this one waits for: set in the UI (Queue), else the recipe's `after`."""
         a = C.queue_overrides(self.top).get(name, {}).get("after")
-        return [d for d in (self.job[name]["spec"].get("after", []) if a is None else a) if d in self.job]
+        return [d for d in (self.job.get(name, {}).get("spec", {}).get("after", []) if a is None else a) if d in self.job]
 
     def _blocked_by(self, j, name):
         want, svc = j["spec"].get("requires_engine"), j["spec"].get("target_service")
         if want and self.svc[svc]["engine"] != want:
             return f"waiting for {svc} to run {want} (it runs {self.svc[svc]['engine']})"
         for dep in self.after_of(name):
-            r = (self.job[dep]["result"] or {}).get("rc")
+            entry = self.job.get(dep)
+            if entry is None:
+                continue
+            r = (entry["result"] or {}).get("rc")
             if r is None:
                 return f"waiting for {dep} to finish"
             if r != 0:
@@ -592,7 +622,7 @@ class Runner:
         from . import progress
         now = self.clock()
         q = C.queue_overrides(self.top)
-        for n, j in self.job.items():
+        for n, j in list(self.job.items()):
             running = j["state"] == HOT and not j["paused"] and not j["frozen"]
             held = (q[n]["hold"] if n in q else bool(j["spec"].get("hold"))) or os.path.exists(self.drain_path)   # Wind down all: like Wind down on each
             self._wind_down_at_saved_point(n, j, held, now)
@@ -605,15 +635,10 @@ class Runner:
             self._track_saves(n, j, running, now)
             cap = j["spec"].get("max_hours")
             if cap and running and j["run_s"] - j.get("cap_base", 0.0) >= float(cap) * 3600:
-                q = C.read_queue(self.top)
-                names = [x.get("name") for x in q.get("jobs", [])]
-                if n not in names:
-                    q.setdefault("jobs", []).append({"name": n})
-                for x in q["jobs"]:
-                    if x.get("name") == n:
-                        x["hold"] = True
-                C.write_queue(self.top, q)
                 with self.lock:
+                    if self.job.get(n) is not j:
+                        continue
+                    self._set_hold(n, True)
                     self._park_job(n, reason=f"reached max_hours = {cap}")
                 j["cap_base"] = j["run_s"]
                 self.audit("max_hours", target=n, note=f"ran {cap} h; parked and held; release it to give it another {cap} h")
@@ -655,8 +680,8 @@ class Runner:
 
     def unsaved_s(self, n):
         """Running time since a work-losing job's last saved point (what stepping aside now would lose), or None."""
-        j = self.job[n]
-        if not j["spec"]["loses_work"] or j["save_run_s"] is None or j["state"] != HOT:
+        j = self.job.get(n)
+        if j is None or not j["spec"]["loses_work"] or j["save_run_s"] is None or j["state"] != HOT:
             return None
         return max(0.0, j["run_s"] - j["save_run_s"])
 
@@ -677,6 +702,8 @@ class Runner:
             j["saved_base"] = v                       # where it was when winding down started
         elif v != j["saved_base"]:
             with self.lock:
+                if self.job.get(n) is not j:
+                    return
                 self._park_job(n, reason=f"wound down: stopped at its saved point {v}")
             self.audit("wound_down", target=n, note=f"stopped at its saved point {v}; Start or Queue continues from there")
             j["saved_base"] = None
@@ -860,6 +887,8 @@ class Runner:
 
     def _resume_job(self, name, reason=""):
         j = self.job[name]
+        if j.get("stopping") or j.get("withdrawing"):
+            return False
         if not G.wait_free(self.gpu, j["spec"]["gpu_gib"], self.top["verify_free_s"], self.policy.reserve_gib):
             self.audit("resume_skipped", target=name, reason="driver does not show enough free memory")
             return False
@@ -888,6 +917,8 @@ class Runner:
         command finishes, so GapRunner learns it even if GapRunner itself was down at the time. A park (SIGTERM to
         the group) ends the wrapper too, so a parked job leaves no result and is started again later."""
         j, sp = self.job[name], self.job[name]["spec"]
+        if j.get("stopping") or j.get("withdrawing"):
+            return False
         res = self._result_path(name)
         if os.path.exists(res):
             os.remove(res)
@@ -988,11 +1019,11 @@ class Runner:
                             now - e["warm_since"] < e["spec"].get("warm_hold_max_s", 300))
                     for n, e in self.svc.items()]
         jobs = []
-        for n, e in self.job.items():
+        for n, e in list(self.job.items()):
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
-                            sp["order"], sp["hold"], sp["window_only"], sp["enabled"], waiting, e["parked_at"],
+                            sp["order"], sp["hold"] or bool(e.get("stopping") or e.get("withdrawing")), sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
                             float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],
@@ -1005,6 +1036,7 @@ class Runner:
             return []                      # a wake is in progress; it owns the GPU this instant
         try:
             self.refresh()
+            self._check_window_file()
             if self.governor is not None:
                 self.governor.tick()
             snap = self.snapshot()
@@ -1026,7 +1058,7 @@ class Runner:
                 if a.kind == "park_service":
                     s = self.svc[a.target]
                     s["state"] = PARKING            # set first, then re-check: see ensure_hot
-                    if s["inflight"]:
+                    if s["inflight"] or s["job_inflight"]:
                         s["state"] = HOT
                         continue
                     if self._transition(s, a.target, "park", a.reason):
@@ -1051,13 +1083,23 @@ class Runner:
         health.check(self)
         return acts
 
+    def _check_window_file(self):
+        """A WINDOW file that isn't a window (a hand edit such as {"until": "06:00"}) counts as no window; say so once."""
+        path = self.top["window_file"]
+        if not os.path.exists(path) or C.window_file_info(self.top) is not None:
+            self.window_ignored = None
+        elif self.window_ignored != _mtime(path):
+            self.window_ignored = _mtime(path)
+            self.audit("window_file_ignored", note='WINDOW should hold {"until": epoch seconds or 0, "exclusive": '
+                                                   'true or false}; until it does, no window is open')
+
     def _track_speed(self):
         """Tokens per second for running jobs and services that expose Prometheus counters (speed.py)."""
         from . import speed
         now = self.clock()
         for e in self.svc.values():
             speed.update(e, speed.url_of(e["spec"]), now, e["state"] == HOT)
-        for j in self.job.values():
+        for j in list(self.job.values()):
             speed.update(j, speed.url_of({"metrics_url": j["spec"].get("metrics_url")}), now,
                          j["state"] == HOT and not j["frozen"])
 
@@ -1090,15 +1132,14 @@ class Runner:
             if mine:
                 gib[n], measured[n] = round(sum(p["gib"] for p in mine), 2), True
             elif e["state"] == HOT:
-                guess.append(n)
+                guess.append((n, float(e["spec"]["gpu_gib"])))
             else:
                 gib[n], measured[n] = 0.0, True
         stow = [p for p in procs if p["pid"] not in claimed]
         # an entry seen only as "hot" (no pids found) is counted at its recipe size, but only out of the GPU memory
         # nothing else accounts for, so a guess never double-counts unknown processes or exceeds the GPU
         left = max(0.0, (reading or {}).get("used_gib", 0.0) - sum(gib.values()) - sum(p["gib"] for p in stow)) if reading else None
-        for n in guess:
-            g = float({**self.svc, **self.job}[n]["spec"]["gpu_gib"])
+        for n, g in guess:
             gib[n], measured[n] = (round(min(g, left), 2) if left is not None else g), False
             if left is not None:
                 left -= gib[n]
@@ -1108,7 +1149,7 @@ class Runner:
         reading = self.gpu.read()
         now = self.clock()
         gib, measured, stow = self.holders(reading)
-        for n, e in self.job.items():           # each run's GPU peak, shown beside the recipe's figure
+        for n, e in list(self.job.items()):     # each run's GPU peak, shown beside the recipe's figure
             if e["state"] == HOT and measured.get(n) and gib.get(n):
                 e["gpu_peak_now"] = max(e.get("gpu_peak_now", 0.0), gib[n])
         busy = {n: bool(e["inflight"]) for n, e in self.svc.items()}
@@ -1203,7 +1244,7 @@ class Runner:
         now = self.clock()
         snap = self.snapshot()
         why = explain(snap, {n: e["gaps"] for n, e in self.svc.items()}, self.policy)
-        for n, e in self.job.items():
+        for n, e in list(self.job.items()):
             if e["frozen"]:
                 why[n] = ("frozen", "paused by you where it was; it keeps its memory. Resume continues it")
         q = C.queue_overrides(self.top)
@@ -1241,7 +1282,9 @@ class Runner:
                                   "p_idle_30s_more": m.p_continue(idle, 30), "median_more_idle_s": m.median_remaining(idle),
                                   "survival": [[x, m.p_continue(x, 30)] for x in (0, 5, 10, 20, 30, 60, 120, 300, 600)]}
         for j in snap.jobs:
-            e = self.job[j.name]
+            e = self.job.get(j.name)
+            if e is None:                         # withdrawn since the snapshot
+                continue
             out["jobs"][j.name] = {"state": e["state"], "order": j.order, "hold": j.hold, "window_only": j.window_only,
                                    "coexist": j.coexist, "paused": e["paused"], "running": e["spec"]["running"],
                                    "parked": e["spec"]["parked"], "cpu_gib_now": _rss_gib(e["driver"].pids()),

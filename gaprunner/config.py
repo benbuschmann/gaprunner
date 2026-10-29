@@ -2,6 +2,7 @@
 import copy
 import datetime as dt
 import json
+import math
 import os
 import tomllib
 
@@ -254,9 +255,18 @@ def window_file_info(top):
         v = json.loads(txt) if txt else {}
     except ValueError:
         v = {}
-    if isinstance(v, (int, float)):
+    if type(v) in (int, float):
         v = {"until": v}
-    return {"until": float(v.get("until") or 0), "exclusive": bool(v.get("exclusive"))}
+    try:
+        until, exclusive = v.get("until", 0), v.get("exclusive", False)
+        if isinstance(until, bool) or not isinstance(exclusive, bool):
+            return None
+        until = float(until)
+        if not math.isfinite(until):
+            return None
+        return {"until": until, "exclusive": exclusive}
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None          # not a window (a list, "until": "06:00"): no window rather than an open-ended one
 
 
 def window_until(top):
@@ -286,9 +296,13 @@ def window_open(top, now=None):
 def read_queue(top):
     try:
         with open(top["queue_file"]) as f:
-            return json.load(f)
+            q = json.load(f)
     except (OSError, ValueError, KeyError, TypeError):
         return {"jobs": []}
+    if not isinstance(q, dict) or not isinstance(q.get("jobs"), list):
+        return {"jobs": []}                       # not a queue GapRunner wrote: no overrides
+    q["jobs"] = [x for x in q["jobs"] if isinstance(x, dict) and isinstance(x.get("name"), str)]
+    return q
 
 
 def write_queue(top, q):

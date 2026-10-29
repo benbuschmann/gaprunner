@@ -169,11 +169,14 @@ class GovernorJob(D.Driver):
                 r.send({"op": "revoke", "grace_s": float(self.spec.get("grace_s", 30))})
             except OSError:
                 pass                              # the launcher is gone; its session ends with it or is waited out
-        deadline = time.monotonic() + self.timeout
+        # the launcher kills the command grace_s after a revoke; one still there 10 s after that isn't stepping aside,
+        # and this runs under the scheduler's lock, so don't wait out timeout_s for it (kill_stuck_jobs takes over)
+        wait = min(self.timeout, float(self.spec.get("grace_s", 30)) + 10)
+        deadline = time.monotonic() + wait
         while self._stepping_aside(r) and time.monotonic() < deadline:
             time.sleep(0.1)
         if self._stepping_aside(r):
-            raise D.DriverError(f"{self.spec['name']}: still running {self.timeout:.0f}s after its reservation was revoked")
+            raise D.DriverError(f"{self.spec['name']}: still running {wait:.0f}s after its reservation was revoked")
         self._event("revoke", seconds=round(time.time() - r.revoked_at, 1))
         self._drop(r, None)
 
