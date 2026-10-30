@@ -72,7 +72,7 @@ On GapRunner's page the job is **idle** until the studio asks, **waiting** while
 
 The live counter in the screenshot ("3/4 passes · FastH3 bf16 (ComfyUI) · 864x480 107f") comes from a two-line
 progress file the renderer writes (`SPARK_PROGRESS_FILE`), which the job's `progress_cmd` reads every 2 s. That file
-is [proposed upstream](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/pulls?q=SPARK_PROGRESS_FILE)
+is [proposed upstream in pull request #182](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/pull/182)
 and not in Imagination Studio yet. Without it the job still shows as running, without the pass count. With it, set
 `progress_cmd = "cat /var/tmp/wass-progress.txt 2>/dev/null"` and `progress_every_s = 2` on the job, and
 `export SPARK_PROGRESS_FILE=/var/tmp/wass-progress.txt` for the studio user.
