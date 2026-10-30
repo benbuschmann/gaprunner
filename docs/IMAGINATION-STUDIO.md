@@ -91,8 +91,8 @@ A 864x480 clip of 107 frames with sound, FastH3 with 4 passes, warm:
 | the same, plus the fp16 video decoder (`SPARK_VAE=minimax_h3_video_vae_fp16.safetensors`) | **about 6.8 s** |
 
 The studio's default TensorFold int8 blocks are tuned for the DGX Spark (GB10). On the GB300 they took 23 s for a
-clip half that length (56 frames), because int8 matrix maths is slow there: we measured 156 TOPS for int8 against
-1,893 TFLOPS for bf16 and 4,111 for fp8. The per-render rows are how we found the second step. The sampler took
+clip half that length (56 frames). In our setup int8 matrix maths was the slow part: we measured 156 TOPS for int8
+against 1,893 TFLOPS for bf16 and 4,111 for fp8. The per-render rows are how we found the second step. The sampler took
 3.8 s of a 12.3 s clip, and decoding the video took 6.7 s. With the fp16 decoder that part takes 1.3 s.
 
 A cold first clip (models loading from disk) took 2 to 2.5 minutes. The Spark keeps its int8 setup, which is the
