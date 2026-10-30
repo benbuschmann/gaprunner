@@ -69,7 +69,7 @@ That's one machine and one workload. Yours will look different.
 
 ## Video renders from Imagination Studio
 
-Some GPU work doesn't come from a recipe. [Imagination Studio](https://github.com/wassermanproductions/imagination-studio)
+Some GPU work doesn't come from a recipe. [Imagination Studio](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman)
 renders clips with sound and can send them to other machines. On the same Station, its renderer asks GapRunner for
 the GPU before it starts ComfyUI (`driver = "governor"`). GapRunner puts the model to sleep, parks the training run at
 its last saved step, and grants the reservation: 4.1 s the first time we tried it, under a second when nothing has to

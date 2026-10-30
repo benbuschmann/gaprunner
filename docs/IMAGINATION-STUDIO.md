@@ -1,6 +1,6 @@
 # Imagination Studio renders on a DGX Station
 
-[Imagination Studio](https://github.com/wassermanproductions/imagination-studio) (by Keys and Sam Wasserman, powered
+[Imagination Studio](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman) (by Keys and Sam Wasserman, powered
 by TensorFold) is a local AI film studio. You plan and write on one machine, and it can send clips to other machines
 to render. This page is how we run a DGX Station as one of those machines while it also serves an LLM all day and
 trains in the gaps, with GapRunner deciding when the renderer gets the GPU.
@@ -70,9 +70,12 @@ doesn't send a clip that would only be turned down.
 On GapRunner's page the job is **idle** until the studio asks, **waiting** while GapRunner makes room, and
 **running** while the reservation is held. Its memory shows in the GPU bar beside the sleeping model.
 
-The live counter in the screenshot ("3/4 passes · FastH3 bf16 (ComfyUI) · 864x480 107f") comes from a small patch on
-our side: the renderer writes a two-line progress file (`SPARK_PROGRESS_FILE`) and the job's `progress_cmd` reads it
-every 2 s. That patch is not in Imagination Studio. Without it the job still shows as running, without the pass count.
+The live counter in the screenshot ("3/4 passes · FastH3 bf16 (ComfyUI) · 864x480 107f") comes from a two-line
+progress file the renderer writes (`SPARK_PROGRESS_FILE`), which the job's `progress_cmd` reads every 2 s. That file
+is [proposed upstream in pull request #182](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/pull/182)
+and not in Imagination Studio yet. Without it the job still shows as running, without the pass count. With it, set
+`progress_cmd = "cat /var/tmp/wass-progress.txt 2>/dev/null"` and `progress_every_s = 2` on the job, and
+`export SPARK_PROGRESS_FILE=/var/tmp/wass-progress.txt` for the studio user.
 
 Each render adds a row to `<state_dir>/governor-<job>.jsonl`: width, height, frames, passes, the model files
 it loaded, how long it took, and the GPU and host memory at the peak. A `ready` row records how long ComfyUI took
@@ -88,11 +91,14 @@ A 864x480 clip of 107 frames with sound, FastH3 with 4 passes, warm:
 | the same, plus the fp16 video decoder (`SPARK_VAE=minimax_h3_video_vae_fp16.safetensors`) | **about 6.8 s** |
 
 The studio's default TensorFold int8 blocks are tuned for the DGX Spark (GB10). On the GB300 they took 23 s for a
-clip half that length (56 frames), because int8 matrix maths is slow there: we measured 156 TOPS for int8 against
-1,893 TFLOPS for bf16 and 4,111 for fp8. The per-render rows are how we found the second step. The sampler took
+clip half that length (56 frames). In our setup int8 matrix maths was the slow part: we measured 156 TOPS for int8
+against 1,893 TFLOPS for bf16 and 4,111 for fp8. The per-render rows are how we found the second step. The sampler took
 3.8 s of a 12.3 s clip, and decoding the video took 6.7 s. With the fp16 decoder that part takes 1.3 s.
 
 A cold first clip (models loading from disk) took 2 to 2.5 minutes. The Spark keeps its int8 setup, which is the
-faster one there.
+faster one there: the same clip, warm, takes about 36.5 s on a DGX Spark with TensorFold int8 (three clips, 36.3 to
+36.7 s, Imagination Studio 4.3.1, 2026-10-30), so the Station renders it about 5x faster.
 
-Measured with GapRunner 0.28 and Imagination Studio 4.1 in October 2026.
+Measured with GapRunner 0.28 and Imagination Studio 4.1 in October 2026. On 2026-10-30 we moved both machines to
+stock Imagination Studio 4.3.1: its governor hook (`spark/workload.py`) is unchanged since 4.1, and a 4.3.1 worker
+passes GapRunner's preflight. The timings above were not re-measured on 4.3.1.
