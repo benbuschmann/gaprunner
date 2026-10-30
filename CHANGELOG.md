@@ -117,7 +117,7 @@ Security fixes for the Jobs API and governor jobs, from an end-to-end test and a
   `gaprunner token` makes a token and its hash. See docs/JOBS-API.md.
 - A governor job's request that can't be admitted soon (wound down, turned off, window-only with no window open, the
   kill switch or Wind down all on) is turned down at once with the reason, instead of waiting `admit_wait_s`.
-  `/api/status` shows `admits_now` and `not_now` for each governor job; `examples/wass_worker_sync.py` uses them to
+  `/api/status` shows `admits_now` and `not_now` for each governor job; `examples/studio_worker_sync.py` uses them to
   keep a machine in Imagination Studio's worker list only while GapRunner would admit its renderer.
 
 ## 0.25.0

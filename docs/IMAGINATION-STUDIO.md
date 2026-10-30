@@ -74,8 +74,8 @@ The live counter in the screenshot ("3/4 passes · FastH3 bf16 (ComfyUI) · 864x
 progress file the renderer writes (`SPARK_PROGRESS_FILE`), which the job's `progress_cmd` reads every 2 s. That file
 is [proposed upstream in pull request #182](https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman/pull/182)
 and not in Imagination Studio yet. Without it the job still shows as running, without the pass count. With it, set
-`progress_cmd = "cat /var/tmp/wass-progress.txt 2>/dev/null"` and `progress_every_s = 2` on the job, and
-`export SPARK_PROGRESS_FILE=/var/tmp/wass-progress.txt` for the studio user.
+`progress_cmd = "cat /var/tmp/studio-progress.txt 2>/dev/null"` and `progress_every_s = 2` on the job, and
+`export SPARK_PROGRESS_FILE=/var/tmp/studio-progress.txt` for the studio user.
 
 Each render adds a row to `<state_dir>/governor-<job>.jsonl`: width, height, frames, passes, the model files
 it loaded, how long it took, and the GPU and host memory at the peak. A `ready` row records how long ComfyUI took
