@@ -96,7 +96,8 @@ against 1,893 TFLOPS for bf16 and 4,111 for fp8. The per-render rows are how we 
 3.8 s of a 12.3 s clip, and decoding the video took 6.7 s. With the fp16 decoder that part takes 1.3 s.
 
 A cold first clip (models loading from disk) took 2 to 2.5 minutes. The Spark keeps its int8 setup, which is the
-faster one there.
+faster one there: the same clip, warm, takes about 36.5 s on a DGX Spark with TensorFold int8 (three clips, 36.3 to
+36.7 s, Imagination Studio 4.3.1, 2026-10-30), so the Station renders it about 5x faster.
 
 Measured with GapRunner 0.28 and Imagination Studio 4.1 in October 2026. On 2026-10-30 we moved both machines to
 stock Imagination Studio 4.3.1: its governor hook (`spark/workload.py`) is unchanged since 4.1, and a 4.3.1 worker
