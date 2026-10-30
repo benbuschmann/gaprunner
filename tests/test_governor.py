@@ -33,7 +33,7 @@ class StubRunner:
 
     def snapshot(self):
         from gaprunner.scheduler import Job, Snapshot
-        j = Job("WASS video", IDLE, 70, 1, 1, 0, hold=self.hold, window_only=self.window_only)
+        j = Job("Video renders", IDLE, 70, 1, 1, 0, hold=self.hold, window_only=self.window_only)
         return Snapshot(1000, [], [j], 100, window_open=self.window_open)
 
     def audit(self, event, **kw):
@@ -47,7 +47,7 @@ class StubRunner:
 
 
 def spec(**kw):
-    return {"name": "WASS video", "driver": "governor", "owner": "studio-comfy", "timeout_s": 10, "grace_s": 2,
+    return {"name": "Video renders", "driver": "governor", "owner": "studio-comfy", "timeout_s": 10, "grace_s": 2,
             "admit_wait_s": 30, **kw}
 
 
@@ -82,21 +82,21 @@ class GovernorConfigTest(unittest.TestCase):
 
 class GovernorSchedulingTest(unittest.TestCase):
     def test_an_idle_job_takes_no_place(self):
-        s = snap(svc_state=PARKED, jobs=[job("wass", state=IDLE, order=0), job("train", order=1)])
+        s = snap(svc_state=PARKED, jobs=[job("renders", state=IDLE, order=0), job("train", order=1)])
         self.assertEqual(kinds(decide(s, LONG, ONE)), [("resume_job", "train")])
-        self.assertEqual(explain(s, LONG, ONE)["wass"][0], "idle")
+        self.assertEqual(explain(s, LONG, ONE)["renders"][0], "idle")
 
     def test_a_service_wake_also_takes_a_job_still_stepping_aside(self):
         from gaprunner.scheduler import plan_wake
-        s = snap(svc_state=PARKED, jobs=[job("wass", state=PARKING, coexist="share", gib=10, order=0)])
-        self.assertEqual(plan_wake(s, "prod"), ["wass"])
+        s = snap(svc_state=PARKED, jobs=[job("renders", state=PARKING, coexist="share", gib=10, order=0)])
+        self.assertEqual(plan_wake(s, "prod"), ["renders"])
 
     def test_a_request_takes_its_place_at_the_top(self):
         # the app asked: the job waits in its place and pushes the training job (lower, keeps its work) aside
-        s = snap(svc_state=PARKED, jobs=[job("wass", order=0, loses_work=True), job("train", state=HOT, order=1)])
+        s = snap(svc_state=PARKED, jobs=[job("renders", order=0, loses_work=True), job("train", state=HOT, order=1)])
         acts = decide(s, LONG, ONE)
         self.assertEqual(kinds(acts), [("park_job", "train")])
-        self.assertIn("makes room for wass", acts[0].reason)
+        self.assertIn("makes room for renders", acts[0].reason)
 
 
 class OrphanedGroupTest(unittest.TestCase):
@@ -448,7 +448,7 @@ class RecorderTest(unittest.TestCase):
         r.granted_at, r.binding = time.time(), None
         r.granted.set()
         j.req = r
-        rec = gov.recorders["WASS video"]
+        rec = gov.recorders["Video renders"]
         rec.poll()                                                   # ComfyUI answers: "ready"
         comfy.running = ["p1"]
         rec.poll()
@@ -466,7 +466,7 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(rows[1]["status"], "success")
         time.sleep(0.4)
         gov.tick()                                                   # idle longer than idle_release_s: revoked
-        self.assertEqual(runner.parked[0][0], "WASS video")
+        self.assertEqual(runner.parked[0][0], "Video renders")
         comfy.running = ["p2"]                                       # a prompt cut off by the end of the reservation
         rec.poll()
         j.req = None
