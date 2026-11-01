@@ -60,7 +60,8 @@ class Runner:
                                    "cost_key": engines[current]["cost_key"], "state": UNKNOWN, "inflight": 0,
                                    "job_inflight": 0, "last_done": clock(), "gaps": GapModel.load(self._gap_path(s["name"])),
                                    "stopping": False, "stopped": False, "starting_since": None, "released": False,
-                                   "switching": None, "schedule_slot": None, "dead_since": None, "wake_failures": 0}
+                                   "switching": None, "schedule_slot": None, "dead_since": None, "wake_failures": 0,
+                                   "restarts": 0}
         self.job = {}
         for j in cfg["jobs"]:
             self.job[j["name"]] = self._job_entry(j)
@@ -358,7 +359,8 @@ class Runner:
             self.audit("request_wake", service=name, ok=ok, total_s=total,
                        **({"over_budget_s": round(total - self.policy.max_added_wait_s, 3)} if total > self.policy.max_added_wait_s else {}))
             if ok:
-                s["dead_since"], s["wake_failures"] = None, 0
+                s["dead_since"], s["wake_failures"], s["restarts"] = None, 0, 0
+                s.pop("gave_up", None)
             else:
                 # requests fail fast from now on instead of each waiting out another wake; the tick restarts it
                 s["dead_since"], s["wake_failures"] = self.clock(), s["wake_failures"] + 1
@@ -368,8 +370,12 @@ class Runner:
             return ok
 
     def _restartable(self, name):
+        """Whether GapRunner restarts it after a failed wake: it has stop and start commands, and fewer than max_restarts
+        restarts in a row have failed to bring it up (an engine that can't start, or a GPU something else still holds,
+        would otherwise be stopped and started forever)."""
         s = self.svc[name]
-        return bool(s["spec"].get("stop_cmd") and s["spec"].get("start_cmd") and s["spec"]["restart_on_failed_wake"])
+        return bool(s["spec"].get("stop_cmd") and s["spec"].get("start_cmd") and s["spec"]["restart_on_failed_wake"]
+                    and s["restarts"] < s["spec"]["max_restarts"])
 
     def _recover(self):
         """A service that failed to wake: restart it (stop_cmd, then start_cmd) when it can be, the way the end of a
@@ -379,6 +385,12 @@ class Runner:
                 continue
             sp = s["spec"]
             if not self._restartable(n):
+                if s["restarts"] and not s.get("gave_up"):
+                    s["gave_up"] = True
+                    self.audit("service_restart_gave_up", target=n, restarts=s["restarts"])
+                    from . import health
+                    health.notify(self, "error", n, f"{n} still not up after {s['restarts']} restarts: GapRunner stopped "
+                                  "restarting it; check it by hand (requests try a wake every dead_retry_s)")
                 if self.clock() - s["dead_since"] >= sp.get("dead_retry_s", 60):
                     s["dead_since"] = None                     # the next request tries a wake again
                 continue
@@ -386,7 +398,9 @@ class Runner:
                 continue
             for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                 self._park_job(jn, reason=f"{n} is restarting after a failed wake")
-            self.audit("service_restart", target=n, reason=f"failed to wake ({s.get('last_error') or 'no answer'})")
+            s["restarts"] += 1
+            self.audit("service_restart", target=n, attempt=s["restarts"],
+                       reason=f"failed to wake ({s.get('last_error') or 'no answer'})")
             self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
             if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
                 s["starting_since"], s["state"] = self.clock(), STARTING
@@ -542,8 +556,9 @@ class Runner:
                 if s["driver"].state() == HOT:
                     self.audit("service_ready", target=n, seconds=round(self.clock() - s["starting_since"], 1))
                     s["starting_since"], s["state"], s["last_done"] = None, HOT, self.clock()
-                    s["dead_since"] = None
+                    s["dead_since"], s["restarts"] = None, 0
                     s.pop("restart_after", None)
+                    s.pop("gave_up", None)
                     self._warm(n)
                 elif self.clock() - s["starting_since"] > sp.get("ready_timeout_s", 1800):
                     self.audit("service_start_timeout", target=n, note="still not ready; check it by hand")

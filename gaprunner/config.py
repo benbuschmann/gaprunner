@@ -172,6 +172,7 @@ def _engine(e, service, name):
     e.setdefault("url", e["upstream"])
     e.setdefault("ready_timeout_s", 1800)
     e.setdefault("restart_on_failed_wake", True)
+    e.setdefault("max_restarts", 3)
     return e
 
 

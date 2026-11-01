@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.29.1
+
+- A service that starts but never becomes ready was stopped and started again forever, one cycle per
+  `ready_timeout_s`: its start timed out, the next request's wake failed, and GapRunner restarted it. This happens
+  when an exclusive window ends while something GapRunner doesn't control still holds the GPU, or when the engine
+  can't load at all. GapRunner now restarts a service at most `max_restarts` times in a row (3 by default). After
+  that it stops running `stop_cmd` and `start_cmd`, sends an `error` alert and logs `service_restart_gave_up`;
+  requests still try a wake every `dead_retry_s`, so a service started by hand is picked up. The count resets when
+  the service answers. Each `service_restart` event now carries its attempt number.
+
 ## 0.29.0
 
 - A job added or withdrawn through the Jobs API at the moment a request arrived could leave that request counted
