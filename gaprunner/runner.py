@@ -1136,6 +1136,11 @@ class Runner:
             self._check_window_file()
             if self.governor is not None:
                 self.governor.tick()
+            if self.live and C.exclusive_window(self.top):
+                # an opening window parks or stops services first: a park and a job's admission both spend host
+                # memory, and a grant shows in free memory only once the app has allocated, so jobs are planned on
+                # what the park left (_windows runs again below for the rest of the window logic)
+                self._windows()
             snap = self.snapshot()
             acts = decide(snap, {n: e["gaps"] for n, e in self.svc.items()}, self.policy)
             plan = [(a.kind, a.target) for a in acts]
