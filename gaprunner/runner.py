@@ -24,7 +24,8 @@ from . import drivers as D
 from . import gpu as G
 from .costs import CostBook
 from .gaps import GapModel
-from .scheduler import DONE, FAILED, HOT, PARKED, PARKING, STARTING, STOPPED, UNKNOWN, Job, Service, Snapshot, decide, explain, plan_wake
+from .scheduler import DONE, FAILED, HOT, PARKED, PARKING, STARTING, STOPPED, UNKNOWN, Job, Service, Snapshot, decide, explain, plan_wake, \
+    short_of_host_only
 
 HISTORY_KEEP_S = 30 * 86400
 ACTIVITY_KEEP_S = 7 * 86400
@@ -601,27 +602,46 @@ class Runner:
                 s["starting_since"], s["dead_since"], s["window_resuming"] = None, self.clock(), False
 
     def _release_if_short(self, snap):
-        """If an eligible job is waiting only because host memory is short, give it host memory: an engine parked for
-        an exclusive window (window_park) is stopped, so the window's end starts it cold as it would without
-        window_park; hot services that can (release_cmd) give back cached host memory, e.g. vLLM's pinned sleep
-        buffer, once per wake (the next park is slower)."""
+        """If a job is waiting only because host memory is short, give it host memory: engines parked for an
+        exclusive window (window_park) are stopped until it fits (_release_window_parked), so the window's end starts
+        them cold as it would without window_park; hot services that can (release_cmd) give back cached host memory,
+        e.g. vLLM's pinned sleep buffer, once per wake (the next park is slower)."""
+        need = sorted((j for j in snap.jobs if short_of_host_only(snap, j, self.policy)), key=lambda j: j.order)
+        if need and snap.exclusive:
+            self._release_window_parked(need[0])
         short = [j for j in snap.jobs if j.state == PARKED and not j.hold and not j.blocked_by and snap.cpu_free_gib is not None
                  and snap.cpu_free_gib - j.run_cpu_gib < self.policy.cpu_floor_gib]
         if not short:
             return
         for n, s in self.svc.items():
             sp = s["spec"]
-            if s.get("window_parked") and float(sp["parked"]["cpu_gib"] or 0) > 0:
-                with self.lock:
-                    if s.get("window_parked") and C.exclusive_window(self.top) and \
-                            self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop"):
-                        s["window_parked"] = False
-                        self.audit("window_park_released", target=n, job=short[0].name,
-                                   note=f"{short[0].name} needs host memory; {n} was stopped and starts cold when the window ends")
-                continue
             if sp.get("release_cmd") and s["state"] == HOT and not s["released"]:
                 if self._shell(sp["release_cmd"], 120, n, "release"):
                     s["released"] = True
+
+    def _release_window_parked(self, job):
+        """Stop window-parked engines that hold host memory (declared [parked] cpu_gib or the measured park_host,
+        whichever is larger), the largest first, until `job` fits: free host memory is read again after each stop,
+        and no engine is stopped once free - job.run_cpu_gib >= cpu_floor_gib.
+
+        stop_cmd runs under self.lock, so _windows can't resume or park the same engine meanwhile. The cost: a request
+        wake or job transition waits for it, up to stop_timeout_s. Requests are refused during an exclusive window, so
+        only a window that ends during the stop waits for it."""
+        held = sorted(((self.host_park_gib(s["cost_key"], float(s["spec"]["parked"]["cpu_gib"] or 0)), n)
+                       for n, s in self.svc.items() if s.get("window_parked")), key=lambda x: -x[0])
+        for gib, n in held:
+            if gib <= 0:
+                continue                                 # it holds no host memory: stopping it frees nothing
+            free = self.host_mem()
+            if free is None or free - job.run_cpu_gib >= self.policy.cpu_floor_gib:
+                return
+            s, sp = self.svc[n], self.svc[n]["spec"]
+            with self.lock:
+                if s.get("window_parked") and C.exclusive_window(self.top) and \
+                        self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop"):
+                    s["window_parked"] = False
+                    self.audit("window_park_released", target=n, job=job.name, gib=round(gib, 1),
+                               note=f"{job.name} needs host memory; {n} was stopped and starts cold when the window ends")
 
     def holds(self):
         """Why nothing new may start right now, or None: drain, a claim's process running, a GPU hold, or settling."""
