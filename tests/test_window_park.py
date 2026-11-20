@@ -75,6 +75,39 @@ class WindowParkTest(unittest.TestCase):
         self.assertTrue(any(e["event"] == "window_resume" for e in r.recent))
         self.assertEqual(chat(port)[0], 200)
 
+    def test_a_job_short_of_host_memory_gets_the_window_parked_engine_stopped(self):
+        # Seen on a DGX Station: the window-parked engine kept a host-memory copy of its GPU image and the window's job
+        # waited 5 min for room that never came; the parked engine is stopped instead and starts cold when the window ends.
+        d = tempfile.mkdtemp()
+        stopped, started = os.path.join(d, "stop-ran"), os.path.join(d, "start-ran")
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False, "cpu_floor_gib": 16},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True, "parked": {"cpu_gib": 100},
+                         "stop_cmd": f"echo x >> {stopped}", "start_cmd": f"touch {started}"}],
+            "job": [{"name": "j", "driver": "restart", "gpu_gib": 10, "coexist": "share", "park_s": 0.1,
+                     "start_cmd": "sleep 60", "running": {"hbm_gib": 10, "cpu_gib": 50}}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        self.addCleanup(lambda: r.job["j"]["driver"].kill())
+        r.host_mem = lambda: 40.0                           # 40 free - 50 needed < 16: the job is short throughout
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped"))
+        self.assertTrue(prod.sleeping, "the window parked the engine")
+        self.assertTrue(wait_for(lambda: any(e["event"] == "window_park_released" for e in r.recent)))
+        rel = [e for e in r.recent if e["event"] == "window_park_released"][-1]
+        self.assertEqual(rel["job"], "j")
+        time.sleep(0.3)
+        with open(stopped) as f:
+            self.assertEqual(f.read().count("x"), 1, "stopped once, not every tick")
+        os.remove(r.top["window_file"])
+        self.assertTrue(wait_for(lambda: os.path.exists(started)), "the window's end starts it cold")
+        self.assertFalse(any(e["event"] == "window_resume" for e in r.recent))
+
     def test_a_failed_window_park_falls_back_to_stop_and_start(self):
         d = tempfile.mkdtemp()
         down = os.path.join(d, "prod-down")

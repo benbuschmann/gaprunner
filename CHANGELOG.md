@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.31.1
+
+- A window-parked engine gives way to a job that is short of host memory. A parked engine can still hold most of
+  its host memory (its parked `cpu_gib`; an engine with an in-place park can keep a host copy of its whole GPU
+  image). When an eligible job waits only on host memory during the window, GapRunner now stops the parked engine
+  (`stop_cmd`; audit event `window_park_released`) and the window's end starts it cold (`start_cmd`), as without
+  `window_park`. Before, the job waited: on a DGX Station an Imagination Studio video job was refused after 5 min of
+  an idle 2 h window.
+
 ## 0.31.0
 
 - Engines can be parked instead of stopped for an exclusive window: `window_park = true`. When a no-service window

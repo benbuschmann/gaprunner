@@ -586,15 +586,26 @@ class Runner:
                 s["starting_since"], s["dead_since"] = None, self.clock()
 
     def _release_if_short(self, snap):
-        """If an eligible job is waiting only because host memory is short, ask hot services that can (release_cmd)
-        to give back cached host memory, e.g. vLLM's pinned sleep buffer. Once per wake; the next park is slower."""
+        """If an eligible job is waiting only because host memory is short, give it host memory: an engine parked for
+        an exclusive window (window_park) is stopped, so the window's end starts it cold as it would without
+        window_park; hot services that can (release_cmd) give back cached host memory, e.g. vLLM's pinned sleep
+        buffer, once per wake (the next park is slower)."""
         short = [j for j in snap.jobs if j.state == PARKED and not j.hold and not j.blocked_by and snap.cpu_free_gib is not None
                  and snap.cpu_free_gib - j.run_cpu_gib < self.policy.cpu_floor_gib]
         if not short:
             return
         for n, s in self.svc.items():
-            if s["spec"].get("release_cmd") and s["state"] == HOT and not s["released"]:
-                if self._shell(s["spec"]["release_cmd"], 120, n, "release"):
+            sp = s["spec"]
+            if s.get("window_parked") and float(sp["parked"]["cpu_gib"] or 0) > 0:
+                with self.lock:
+                    if s.get("window_parked") and C.exclusive_window(self.top) and \
+                            self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop"):
+                        s["window_parked"] = False
+                        self.audit("window_park_released", target=n, job=short[0].name,
+                                   note=f"{short[0].name} needs host memory; {n} was stopped and starts cold when the window ends")
+                continue
+            if sp.get("release_cmd") and s["state"] == HOT and not s["released"]:
+                if self._shell(sp["release_cmd"], 120, n, "release"):
                     s["released"] = True
 
     def holds(self):
