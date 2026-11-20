@@ -44,7 +44,7 @@ GPU. It is early (0.x) and has been running in production on one NVIDIA DGX Stat
 |---|---|
 | **Placements** | Each job says where it may run: beside the model (`share`), beside it but pausing its compute while the model answers (`yield`), only while the model sleeps (`no`), or only in slow-wake / no-model periods (`window_only`). |
 | **Engines** | Several engines behind one service name, switched by hand, from the page or on a daily schedule. The gate rewrites the request's model name, so clients keep one alias. `warm_cmd` brings an engine back to full speed after a wake. |
-| **Periods for big jobs** | "Slow-wake" periods let slower jobs run while the model sleeps (requests may wait longer); "No prod" periods stop the model so a big job gets the whole GPU, then start it again. |
+| **Periods for big jobs** | "Slow-wake" periods let slower jobs run while the model sleeps (requests may wait longer); "No prod" periods stop the model so a big job gets the whole GPU, then start it again; an engine that parks in seconds can be parked for them instead (`window_park`). |
 | **Web page** | One self-contained HTML file (no CDN, no build step) with live updates. See below. |
 
 ## One night on a GB300 Station
@@ -129,7 +129,8 @@ The scheduler is a pure function of a snapshot, so the daemon and `gaprunner rep
   log, recipe, run history and its own best results so far (from `summary_cmd`); a timeline of what is coming up.
 - **History** and **Help** tabs. Every job and service says in a sentence why it is (or isn't) running.
 - Engine switching, "Slow-wake" periods (slower jobs may run while the model sleeps; requests may wait longer) and
-  "No prod" periods (the model is stopped so a big job gets the whole GPU, then started again).
+  "No prod" periods (the model is stopped, or parked with `window_park`, so a big job gets the whole GPU, then
+  started or resumed again).
 - Claims for work you started by hand, so its memory is counted or scheduling holds while it runs; GPU memory nobody
   claims is shown as unknown, and model servers GapRunner doesn't manage are named where it can find them.
 - Reading needs nothing; every change needs a PIN.

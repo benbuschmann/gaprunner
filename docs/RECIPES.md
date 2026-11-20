@@ -1,6 +1,6 @@
 # Job recipes
 
-> Words: the web page uses plain words; the config keeps technical names. **Start / Wind down** = `hold = false / true` (a running job with `saved_cmd` stops at its next saved point). **Queue** = `after`, set from the UI; **Queue in order** sets it for several selected jobs at once (each after the one before). **Clear** = `archived` in the queue file (hidden under Cleared, held). **Pause / Resume** = freeze/thaw (SIGSTOP/SIGCONT, nothing lost). **Stop** = end it now (resumes from its checkpoint). **Measure** = calibrate. **Runs: alongside prod / alongside prod, gives way / only while prod sleeps** = `coexist = "share" / "yield" / "no"`; **only during slow-wake prod** = `window_only = true`. **Slow-wake prod** = a window: jobs that are slow to step aside may run while prod sleeps, so a request may wait longer. **No prod** = an exclusive window: prod is stopped for it. **Prod only** = the pause kill switch, **Wind down all** = drain. **Idea** = a planned queue item.
+> Words: the web page uses plain words; the config keeps technical names. **Start / Wind down** = `hold = false / true` (a running job with `saved_cmd` stops at its next saved point). **Queue** = `after`, set from the UI; **Queue in order** sets it for several selected jobs at once (each after the one before). **Clear** = `archived` in the queue file (hidden under Cleared, held). **Pause / Resume** = freeze/thaw (SIGSTOP/SIGCONT, nothing lost). **Stop** = end it now (resumes from its checkpoint). **Measure** = calibrate. **Runs: alongside prod / alongside prod, gives way / only while prod sleeps** = `coexist = "share" / "yield" / "no"`; **only during slow-wake prod** = `window_only = true`. **Slow-wake prod** = a window: jobs that are slow to step aside may run while prod sleeps, so a request may wait longer. **No prod** = an exclusive window: prod is stopped for it (or parked, with `window_park = true`). **Prod only** = the pause kill switch, **Wind down all** = drain. **Idea** = a planned queue item.
 
 A recipe is one `[[job]]` entry in the config. It tells GapRunner how to start the job, how the job steps aside when a service needs the GPU, where it may run, and how much memory it uses.
 
@@ -202,6 +202,13 @@ progress_every_s = 2                            # read it every 2 s: one clip ta
 ```
 
 On the app's side, set `SPARK_GOVERNOR=/var/tmp/gaprunner-governor` in the environment its renderer starts in.
+
+**Host memory.** The job is checked against free host memory at `running.cpu_gib` (less `parked.cpu_gib`), its worst
+case. An app can say what each request adds (`estimated_incremental_gib`; the client's `--estimated-incremental-gib`),
+and with `use_request_estimate = true` GapRunner checks that figure instead, so a small render can start where the
+worst case would not fit. The figure must be host memory in GiB, not GPU or unified memory; turn the option on only
+for an app whose estimate is that. A request without an estimate, or with zero or less, is checked at the worst case.
+GapRunner admits only the request whose estimate it checked: if another takes its place first, it is checked again.
 
 On the page the job is **idle** while nothing has asked, **waiting** in its place once the app asks, and **running**
 while the reservation is held. Wind down keeps it from being admitted: a request then waits `admit_wait_s` and is
