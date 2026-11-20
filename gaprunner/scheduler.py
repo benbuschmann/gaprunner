@@ -307,6 +307,27 @@ def decide(snap, gaps, policy):
     return acts
 
 
+def short_of_host_only(snap, job, policy):
+    """Whether host memory is all that keeps this job from starting now: it waits in the queue (parked, not pinned,
+    eligible, not just stepped aside), nothing holds new starts, a max_active_jobs slot is free, a yield job isn't
+    kept out by a busy service, it fits the GPU, and free host memory less its run_cpu_gib is below cpu_floor_gib.
+    The runner frees host memory only for such a job (it stops a window-parked engine)."""
+    if snap.paused or snap.hold or snap.cpu_free_gib is None:
+        return False
+    if job.state != PARKED or job.pinned or not eligible(snap, job, policy)[0]:
+        return False
+    if job.parked_at is not None and snap.now - job.parked_at < policy.juggle_s:
+        return False
+    if policy.max_active_jobs and len(active_jobs(snap)) >= policy.max_active_jobs:
+        return False
+    if job.coexist == "yield" and any(s.inflight for s in snap.services):
+        return False
+    free = snap.gpu_total_gib - max(committed_gib(snap), snap.gpu_used_gib or 0.0) - policy.reserve_gib
+    if job.gpu_gib > free:
+        return False
+    return snap.cpu_free_gib - job.run_cpu_gib < policy.cpu_floor_gib
+
+
 def plan_wake(snap, service=None, reserve_gib=0.0):
     """Jobs to park before waking `service`: every gap job, plus coexisting jobs (lowest priority first) until the
     service fits beside what is left. Without a service name, every job that may hold GPU memory."""

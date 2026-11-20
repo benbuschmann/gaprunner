@@ -223,5 +223,71 @@ class WindowParkTest(unittest.TestCase):
         C.parse(base)
 
 
+class ReleaseTest(unittest.TestCase):
+    """_release_if_short during a window, called directly on engines marked window-parked: which engines it stops."""
+
+    def runner(self, parked=(100, 100), job=None, floor=16):
+        d = tempfile.mkdtemp()
+        self.log = os.path.join(d, "stopped")
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "cpu_floor_gib": floor},
+            "service": [{"name": f"e{i}", "driver": "vllm", "upstream": "http://127.0.0.1:1", "listen": "127.0.0.1:0",
+                         "gpu_gib": 10, "window_park": True, "parked": {"cpu_gib": gib},
+                         "stop_cmd": f"echo e{i} >> {self.log}", "start_cmd": "true"} for i, gib in enumerate(parked)],
+            "job": [{"name": "j", "driver": "restart", "gpu_gib": 10, "coexist": "share", "start_cmd": "true",
+                     "running": {"hbm_gib": 10, "cpu_gib": 50}, **(job or {})}],
+        })
+        r = Runner(cfg, gpu=FakeGpu(100.0))
+        for s in r.svc.values():
+            s["stopped"], s["state"], s["window_parked"] = True, "stopped", True
+        r.job["j"]["state"] = "parked"
+        # 40 GiB free with every engine parked; each stop gives back what that engine holds parked
+        r.host_mem = lambda: 40.0 + sum(parked[int(n[1:])] for n in self.stopped())
+        open_window(r)
+        return r
+
+    def stopped(self):
+        try:
+            with open(self.log) as f:
+                return f.read().split()
+        except FileNotFoundError:
+            return []
+
+    def released(self, r):
+        r._release_if_short(r.snapshot())
+        return self.stopped()
+
+    def test_engines_are_stopped_only_until_the_job_fits(self):
+        r = self.runner(parked=(100, 100))
+        self.assertEqual(self.released(r), ["e0"], "140 GiB free after one stop: 140 - 50 >= 16")
+        self.assertTrue(r.svc["e1"]["window_parked"])
+        r = self.runner(parked=(10, 20))
+        self.assertEqual(self.released(r), ["e1", "e0"], "the largest first; both needed (40 + 20 + 10 - 50 >= 16)")
+
+    def test_a_job_that_could_not_start_anyway_stops_nothing(self):
+        for why, job in (("disabled", {"enabled": False}), ("held", {"hold": True}),
+                         ("does not fit the GPU", {"gpu_gib": 200, "running": {"hbm_gib": 200, "cpu_gib": 50}}),
+                         ("fits already", {"running": {"hbm_gib": 10, "cpu_gib": 10}})):
+            with self.subTest(why=why):
+                self.assertEqual(self.released(self.runner(job=job)), [])
+
+    def test_measured_parked_host_memory_counts_when_none_is_declared(self):
+        r = self.runner(parked=(0,))
+        self.assertEqual(self.released(r), [], "declares 0 and nothing measured: stopping it frees nothing")
+        r = self.runner(parked=(0,))
+        for _ in range(3):
+            r.costs.record(r.svc["e0"]["cost_key"], "park_host", 100.0)
+        r.host_mem = lambda: 40.0 + (100.0 if self.stopped() else 0.0)
+        self.assertEqual(self.released(r), ["e0"], "it was measured holding 100 GiB parked")
+
+    def test_nothing_is_stopped_once_the_window_has_ended(self):
+        r = self.runner()
+        snap = r.snapshot()
+        os.remove(r.top["window_file"])
+        r._release_if_short(snap)
+        self.assertEqual(self.stopped(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
