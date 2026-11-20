@@ -768,11 +768,12 @@ class Runner:
             return False
 
     # ---------- transitions ----------
-    def _transition(self, entry, name, op, reason=""):
+    def _transition(self, entry, name, op, reason="", **kw):
+        """kw goes to the driver's resume (a governor job's request_id)."""
         d, t0 = entry["driver"], self.clock()
         host0 = self.host_mem() if op == "park" else None
         try:
-            (d.park if op == "park" else d.resume)()
+            d.park() if op == "park" else d.resume(**kw)
         except Exception as e:  # noqa: BLE001 -- any driver failure is logged and reported, never raised into the gate
             self.audit(f"{op}_failed", target=name, error=str(e)[:300], reason=reason)
             entry["last_error"] = str(e)[:300]
@@ -932,9 +933,16 @@ class Runner:
                        reason=f"host memory for {name}, higher in the queue; it starts again from its own checkpoint")
         return freed
 
-    def _resume_job(self, name, reason=""):
+    def _resume_job(self, name, reason="", ask_id=None):
+        """ask_id: for a governor job planned on its request's estimate, that request's token. If another request
+        has taken its place since the snapshot, nothing is admitted: the next tick plans the new one on its own
+        estimate."""
         j = self.job[name]
         if j.get("stopping") or j.get("withdrawing"):
+            return False
+        if ask_id is not None and j["driver"].asked()[0] != ask_id:
+            self.audit("resume_skipped", target=name, reason="its app's request changed since it was planned; "
+                                                                "planned again with the new request")
             return False
         if not G.wait_free(self.gpu, j["spec"]["gpu_gib"], self.top["verify_free_s"], self.policy.reserve_gib):
             self.audit("resume_skipped", target=name, reason="driver does not show enough free memory")
@@ -953,7 +961,7 @@ class Runner:
                 return False
         if j["spec"].get("start_cmd") and not j["driver"].pids():
             return self._start(name, reason)
-        ok = self._transition(j, name, "resume", reason)
+        ok = self._transition(j, name, "resume", reason, **({"request_id": ask_id} if ask_id is not None else {}))
         if ok:
             j["waiting_since"] = None
         return ok
@@ -1069,14 +1077,14 @@ class Runner:
         for n, e in list(self.job.items()):
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
-            asked = e["driver"].asked_cpu_gib() if sp.get("use_request_estimate") else None
+            ask_id, asked = e["driver"].asked() if sp.get("use_request_estimate") else (None, None)
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
                             sp["order"], sp["hold"] or bool(e.get("stopping") or e.get("withdrawing")), sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             asked if asked is not None else
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
                             float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],
-                            frozen=e["frozen"]))
+                            frozen=e["frozen"], ask_id=ask_id if asked is not None else None))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
                         self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
 
@@ -1117,7 +1125,8 @@ class Runner:
                 elif a.kind == "park_job":
                     self._park_job(a.target, a.reason)
                 elif a.kind == "resume_job":
-                    self._resume_job(a.target, a.reason)
+                    self._resume_job(a.target, a.reason,
+                                     ask_id=next((j.ask_id for j in snap.jobs if j.name == a.target), None))
             self._windows()
             self._recover()
             self._schedules()
