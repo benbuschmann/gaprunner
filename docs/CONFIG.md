@@ -120,6 +120,7 @@ See [RECIPES.md](RECIPES.md) for the walk-through. Required: `name`, `driver`, a
 | `metrics_url` | none | Prometheus metrics of the job's own server, for speed and engine stats |
 | `owner`, `admit_wait_s`, `grace_s` | none, `300`, `30` | governor jobs: the name the app asks under; how long a request may wait to be admitted; SIGTERM-to-SIGKILL time after a revoke (GapRunner waits at most `grace_s` + 10 s, or `timeout_s` if lower, for a revoked app to step aside) |
 | `bind_timeout_s` | `30` | governor jobs: an admitted app that hasn't started its command by then is revoked |
+| `use_request_estimate` | `false` | governor jobs: check the host memory the app's request says it adds (`estimated_incremental_gib`, in host GiB) against free host memory instead of `running.cpu_gib` - `parked.cpu_gib`. Turn it on only when the app's figure is host memory (not GPU or unified memory); a request without a positive estimate is checked at the configured figure |
 | `comfy_url`, `idle_release_s` | none, `600` | governor jobs: the app's ComfyUI, to record each prompt it runs; revoke after this long with nothing to run (0 = never) |
 | driver fields | | `url`, `headers` (vllm, sglang, park-protocol); `park_cmd`, `resume_cmd`, `state_cmd` (command); `pid_file`, `pids`, `pids_cmd`, `pgrep`, `sudo`, `cuda_checkpoint` (cuda-checkpoint and adopted jobs) |
 
