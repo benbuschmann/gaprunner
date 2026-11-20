@@ -137,6 +137,49 @@ class WindowParkTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: os.path.exists(started)), "the window's end starts it")
         self.assertFalse(any(e["event"] == "window_resume" for e in r.recent))
 
+    def test_a_window_that_opens_during_the_last_one_s_resume_waits_for_it(self):
+        # a resume runs outside the lock; a window opening meanwhile used to park the engine under it, and the resume
+        # then left it awake while GapRunner counted it stopped and parked
+        d = tempfile.mkdtemp()
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True, "stop_cmd": "true", "start_cmd": "true"}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        inner, began, go, parks = r.svc["prod"]["driver"], threading.Event(), threading.Event(), []
+        self.addCleanup(go.set)
+
+        class SlowResume:
+            def __getattr__(self, k):
+                return getattr(inner, k)
+
+            def park(self):
+                parks.append(began.is_set() and not go.is_set())    # True: parked while a resume was running
+                inner.park()
+
+            def resume(self):
+                began.set()
+                go.wait(10)
+                inner.resume()
+        r.svc["prod"]["driver"] = SlowResume()
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped" and prod.sleeping))
+        os.remove(r.top["window_file"])
+        self.assertTrue(began.wait(5), "the window's end resumes it")
+        open_window(r)                                       # the next window opens while that resume is running
+        time.sleep(0.5)
+        self.assertEqual(parks, [False], "not parked under the running resume")
+        go.set()
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped" and len(parks) == 2))
+        self.assertTrue(prod.sleeping, "parked for the new window once the resume finished")
+        self.assertTrue(r.svc["prod"]["window_parked"])
+        self.assertFalse(r.svc["prod"]["window_resuming"])
+
     def test_a_failed_window_park_falls_back_to_stop_and_start(self):
         d = tempfile.mkdtemp()
         down = os.path.join(d, "prod-down")
