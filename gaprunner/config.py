@@ -167,6 +167,13 @@ def _engine(e, service, name):
     _footprint(e, f"service {service['name']} engine {name}")
     if bool(e.get("stop_cmd")) != bool(e.get("start_cmd")):
         raise ConfigError(f"service {service['name']} engine {name}: stop_cmd and start_cmd go together")
+    effort_ok = lambda v: (type(v) is int and 1 <= v <= 100) or (isinstance(v, str) and v != "")
+    emap = e.get("reasoning_effort_map")
+    if emap is not None and not (isinstance(emap, dict) and emap and all(isinstance(k, str) and effort_ok(v) for k, v in emap.items())):
+        raise ConfigError(f"service {service['name']} engine {name}: reasoning_effort_map maps effort names to an "
+                          "integer 1-100 or a name, e.g. { high = 50 }")
+    if "reasoning_effort_default" in e and not effort_ok(e["reasoning_effort_default"]):
+        raise ConfigError(f"service {service['name']} engine {name}: reasoning_effort_default is an integer 1-100 or a name")
     e.setdefault("wake_s", 1.0)
     e.setdefault("park_s", 1.0)
     e.setdefault("url", e["upstream"])
