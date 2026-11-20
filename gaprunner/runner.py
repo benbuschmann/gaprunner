@@ -544,8 +544,11 @@ class Runner:
                 if s["inflight"] and self.clock() - s.get("stop_asked", self.clock()) < sp.get("stop_grace_s", 60):
                     s.setdefault("stop_asked", self.clock())
                     continue                             # let requests in flight finish first
+                # decided before any attempt: a park that fails can leave the driver reporting PARKED, and a failed
+                # park must still take the stop path
+                already = bool(sp.get("window_park")) and s["state"] == PARKED     # idle-parked: kept parked
                 parked = False
-                if sp.get("window_park") and s["state"] != PARKED:
+                if sp.get("window_park") and not already:
                     # the same host-memory rule as an idle park: a park that would leave less than cpu_floor_gib
                     # free is not made; the engine is stopped instead
                     need, free = self._svc_park_host_gib(s), self.host_mem()
@@ -555,11 +558,10 @@ class Runner:
                                           f"(floor {self.policy.cpu_floor_gib:.0f}); stopped instead")
                     else:
                         parked = self._transition(s, n, "park", reason="exclusive window")
-                ok = parked or s["state"] == PARKED and sp.get("window_park") \
-                    or self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
+                ok = parked or already or self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
                 s.pop("stop_asked", None)
                 if ok:
-                    s["window_parked"] = bool(sp.get("window_park")) and s["state"] == PARKED
+                    s["window_parked"] = parked or already
                     s["stopped"], s["stopping"], s["state"], s["starting_since"] = True, False, STOPPED, None
             elif not ex and (s["stopped"] or s["stopping"]):
                 for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
