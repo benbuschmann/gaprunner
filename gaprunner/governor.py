@@ -308,7 +308,7 @@ class GovernorJob(D.Driver):
             token, g = r.token, r.msg.get("estimated_incremental_gib")
         try:
             g = float(g) if g is not None and not isinstance(g, bool) else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):      # OverflowError: an integer too large for a float
             g = None
         return token, (g if g is not None and 0 < g < float("inf") else None)
 
