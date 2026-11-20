@@ -265,6 +265,31 @@ class WindowParkTest(unittest.TestCase):
         self.assertFalse(os.path.exists(started), "resumed, not started")
         self.assertEqual(chat(port)[0], 200)
 
+    def test_a_park_that_fails_after_parking_part_way_still_takes_the_stop_path(self):
+        # the park hook gets the engine to report "parked", then fails: the stop fallback must still run
+        d = tempfile.mkdtemp()
+        asleep, stopped, started = (os.path.join(d, x) for x in ("asleep", "stop-ran", "start-ran"))
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False},
+            "service": [{"name": "prod", "driver": "command", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True,
+                         "park_cmd": f"touch {asleep}; exit 3", "resume_cmd": f"rm -f {asleep}",
+                         "state_cmd": f"test -f {asleep} && echo parked || echo hot",
+                         "stop_cmd": f"touch {stopped}", "start_cmd": f"rm -f {asleep}; touch {started}"}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped"))
+        self.assertTrue(any(e["event"] == "park_failed" for e in r.recent))
+        self.assertTrue(os.path.exists(stopped), "the failed park fell back to stop_cmd")
+        self.assertFalse(r.svc["prod"]["window_parked"])
+        os.remove(r.top["window_file"])
+        self.assertTrue(wait_for(lambda: os.path.exists(started)), "and starts cold at the window's end")
+
     def test_config_needs_a_stop_to_fall_back_to_and_command_hooks(self):
         base = {"gaprunner": {"state_dir": tempfile.mkdtemp()},
                 "service": [{"name": "prod", "driver": "command", "upstream": "http://127.0.0.1:1", "listen": "127.0.0.1:0",
