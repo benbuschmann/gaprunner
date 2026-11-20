@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.31.0
+
+- Engines can be parked instead of stopped for an exclusive window: `window_park = true`. When a no-service window
+  opens, GapRunner parks the engine with its driver (for the `command` driver, `park_cmd`) and, when the window ends,
+  resumes it (`resume_cmd`) in the background, then reports `service_ready` as after a start. Requests still get the
+  window's 503 meanwhile. A failed park falls back to `stop_cmd` (and the window end to `start_cmd`); a failed resume
+  is handled like a failed start. Engine switches still stop the old engine. For engines whose park takes seconds
+  but whose cold start takes minutes: on a DGX Station, an engine serving DeepSeek V4.1 with an in-place park parks
+  in about 21 s and resumes in about 20 s, against a 380 s cold start at every window before.
+
 ## 0.30.0
 
 - Engines can translate reasoning effort: `reasoning_effort_map` (effort names to this engine's values) and

@@ -167,6 +167,12 @@ def _engine(e, service, name):
     _footprint(e, f"service {service['name']} engine {name}")
     if bool(e.get("stop_cmd")) != bool(e.get("start_cmd")):
         raise ConfigError(f"service {service['name']} engine {name}: stop_cmd and start_cmd go together")
+    if e.get("window_park") and not e.get("stop_cmd"):
+        raise ConfigError(f"service {service['name']} engine {name}: window_park needs stop_cmd and start_cmd "
+                          "(a failed park falls back to a stop)")
+    if e.get("window_park") and e.get("driver") == "command" and not (e.get("park_cmd") and e.get("resume_cmd")):
+        raise ConfigError(f"service {service['name']} engine {name}: window_park with the command driver needs "
+                          "park_cmd and resume_cmd")
     effort_ok = lambda v: (type(v) is int and 1 <= v <= 100) or (isinstance(v, str) and v != "")
     emap = e.get("reasoning_effort_map")
     if emap is not None and not (isinstance(emap, dict) and emap and all(isinstance(k, str) and effort_ok(v) for k, v in emap.items())):
