@@ -538,6 +538,8 @@ class Runner:
                 continue
             if ex and not s["stopped"]:
                 s["stopping"] = True                     # new requests get 503 from now on
+                if s.get("window_resuming"):
+                    continue                             # the last window's resume is still running: act once it ends
                 if s["inflight"] and self.clock() - s.get("stop_asked", self.clock()) < sp.get("stop_grace_s", 60):
                     s.setdefault("stop_asked", self.clock())
                     continue                             # let requests in flight finish first
@@ -557,13 +559,13 @@ class Runner:
                 s.pop("stop_asked", None)
                 if ok:
                     s["window_parked"] = bool(sp.get("window_park")) and s["state"] == PARKED
-                    s["stopped"], s["stopping"], s["state"] = True, False, STOPPED
+                    s["stopped"], s["stopping"], s["state"], s["starting_since"] = True, False, STOPPED, None
             elif not ex and (s["stopped"] or s["stopping"]):
                 for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                     self._park_job(jn, reason="GPU window ended")
                 if s["stopped"]:
                     if s.pop("window_parked", False):
-                        s["starting_since"], s["state"] = self.clock(), STARTING
+                        s["starting_since"], s["state"], s["window_resuming"] = self.clock(), STARTING, True
                         threading.Thread(target=self._window_resume, args=(n,), daemon=True, name=f"window-resume-{n}").start()
                     elif self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
                         s["starting_since"], s["state"] = self.clock(), STARTING
@@ -584,15 +586,19 @@ class Runner:
 
     def _window_resume(self, name):
         """Resume an engine parked for a window (outside the lock, as an engine switch resumes one); the tick sees it
-        HOT and logs service_ready. A failed resume is reported like a failed start: _recover restarts the service."""
+        HOT and logs service_ready. A failed resume is reported like a failed start: _recover restarts the service.
+        While it runs, s["window_resuming"] is set and a new window waits for it (_windows) instead of parking or
+        stopping the engine under it."""
         s, t0 = self.svc[name], self.clock()
         try:
             s["driver"].resume()
             self.audit("window_resume", target=name, seconds=round(self.clock() - t0, 1))
+            with self.lock:
+                s["window_resuming"] = False
         except Exception as e:  # noqa: BLE001 -- reported, then handled by _recover as a failed start
             self.audit("window_resume_failed", target=name, error=str(e)[:300])
             with self.lock:
-                s["starting_since"], s["dead_since"] = None, self.clock()
+                s["starting_since"], s["dead_since"], s["window_resuming"] = None, self.clock(), False
 
     def _release_if_short(self, snap):
         """If an eligible job is waiting only because host memory is short, give it host memory: an engine parked for
