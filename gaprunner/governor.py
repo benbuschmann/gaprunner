@@ -60,6 +60,10 @@ class Request:
             self.conn.sendall((json.dumps(obj) + "\n").encode())
 
 
+class RequestChanged(D.DriverError):
+    """The waiting request is not the one the scheduler planned for."""
+
+
 class GovernorJob(D.Driver):
     """The driver of a job an app asks for. One reservation at a time per job (per owner name)."""
 
@@ -112,13 +116,17 @@ class GovernorJob(D.Driver):
             return []
         return D._cached(("governor", r.token), lambda: PB.session(r.binding))
 
-    def resume(self):
+    def resume(self, request_id=None):
         """Admit the waiting request: save its token, then answer it. Returns at once; the app binds its command
-        within bind_timeout_s or the reservation is revoked (Governor.tick), so no lock is held while it starts."""
+        within bind_timeout_s or the reservation is revoked (Governor.tick), so no lock is held while it starts.
+        request_id: the token of the request the scheduler planned for (its estimate was checked); a different
+        request waiting now is not admitted (RequestChanged), so it is planned again with its own estimate."""
         with self.lock:
             r = self.req
             if r is None or r.granted.is_set():
                 raise D.DriverError(f"{self.spec['name']}: nothing is waiting for a reservation")
+            if request_id is not None and r.token != request_id:
+                raise RequestChanged(f"{self.spec['name']}: the request changed since it was planned")
             r.granted_at = time.time()
             r.granted.set()
         self.on_change()                      # the token is on disk before the app hears it, so a restart can adopt it
@@ -287,15 +295,22 @@ class GovernorJob(D.Driver):
         """Host memory (GiB) the current request says it needs (estimated_incremental_gib), or None without a
         request or a usable estimate. A missing, non-numeric, zero or negative estimate is no estimate: the job is
         then checked at its configured worst case, never at 0. The scheduler and the window-park release use it in
-        place of that worst case."""
+        place of that worst case (with use_request_estimate)."""
+        return self.asked()[1]
+
+    def asked(self):
+        """(token, GiB) of the current request, read together: the token says which request the figure belongs to,
+        so a grant can be refused when another request took its place (see resume). (None, None) without one."""
         with self.lock:
             r = self.req
-            g = r.msg.get("estimated_incremental_gib") if r is not None else None
+            if r is None:
+                return None, None
+            token, g = r.token, r.msg.get("estimated_incremental_gib")
         try:
             g = float(g) if g is not None and not isinstance(g, bool) else None
         except (TypeError, ValueError):
-            return None
-        return g if g is not None and 0 < g < float("inf") else None
+            g = None
+        return token, (g if g is not None and 0 < g < float("inf") else None)
 
     # ---- helpers ----
     def _alive(self, r):

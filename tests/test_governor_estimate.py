@@ -135,5 +135,46 @@ class LiveRequestWindowParkTest(unittest.TestCase):
                                       "use_request_estimate": True}]})
 
 
+class RequestIdentityTest(unittest.TestCase):
+    """The estimate the scheduler checked belongs to one request: if that request leaves and another takes its place
+    before the grant, the newcomer is not admitted on the old figure."""
+
+    def test_a_request_that_replaced_the_planned_one_is_planned_again(self):
+        from gaprunner.runner import Runner
+        d = tempfile.mkdtemp()
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        self.addCleanup(prod.srv.shutdown)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d},
+            "policy": {"reserve_gib": 0, "cpu_floor_gib": 16},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60}],
+            "job": [{"name": "v", "driver": "governor", "owner": "studio", "gpu_gib": 10, "grace_s": 1,
+                     "running": {"hbm_gib": 10, "cpu_gib": 50}, "use_request_estimate": True}],
+        })
+        r = Runner(cfg, gpu=gpu)
+        r.governor.install()
+        r.host_mem = lambda: 100.0
+        gj = r.job["v"]["driver"]
+        a, app_a = ask(gj, client_message("--estimated-incremental-gib", "20"))
+        self.addCleanup(app_a.close)
+        planned = r.snapshot().jobs[0]
+        self.assertEqual((planned.run_cpu_gib, planned.ask_id), (20.0, a.token))
+        gj.gone(a)                                                   # A leaves; B, much larger, asks at once
+        b, app_b = ask(gj, client_message("--estimated-incremental-gib", "200"))
+        self.addCleanup(app_b.close)
+        self.assertFalse(r._resume_job("v", "fits", ask_id=planned.ask_id))
+        self.assertFalse(b.granted.is_set(), "B is not admitted on A's 20 GiB")
+        self.assertTrue(any(e["event"] == "resume_skipped" and e["target"] == "v" for e in r.recent))
+        again = r.snapshot().jobs[0]
+        self.assertEqual((again.run_cpu_gib, again.ask_id), (200.0, b.token), "the next plan uses B's own estimate")
+        # the same check inside the driver, for a request that changes between that check and the grant
+        with self.assertRaises(GV.RequestChanged):
+            gj.resume(request_id=a.token)
+        self.assertFalse(b.granted.is_set())
+        gj.resume(request_id=b.token)
+        self.assertTrue(b.granted.is_set())
+
+
 if __name__ == "__main__":
     unittest.main()
