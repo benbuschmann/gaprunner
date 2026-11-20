@@ -52,7 +52,7 @@ class EstimateTest(unittest.TestCase):
                 self.addCleanup(app.close)
                 self.assertEqual(j.asked_cpu_gib(), want)
                 j.gone(r)
-        for bad in ("lots", None, True, float("nan")):
+        for bad in ("lots", None, True, float("nan"), 10 ** 400):
             with self.subTest(bad=bad):
                 j = self.job()
                 r, app = ask(j, {"op": "reserve", "owner": "studio", "estimated_incremental_gib": bad})
