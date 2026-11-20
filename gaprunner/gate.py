@@ -34,13 +34,14 @@ def rewrite_request(obj, spec):
     the top-level field) becomes the engine's value for it, sent as chat_template_kwargs.reasoning_effort; with
     reasoning_effort_default, a request that names none gets that value. Two engines can read the same name
     differently (DeepSeek V4.1: vLLM renders "high" as effort 50, another engine as 75), so the map lives on the engine.
-    A request with thinking off ("none", enable_thinking / thinking false), a number, or a name the map doesn't list
-    goes on as sent."""
+    Only chat requests ("messages" in the body) are touched: completions, embeddings, tokenize and the like go on as
+    sent. A request with thinking off ("none", enable_thinking / thinking false), a number, a name the map doesn't
+    list, or an effort of its own elsewhere (e.g. reasoning.effort) goes on as sent and never gets the default."""
     changed = False
     if spec.get("model_name") and "model" in obj:
         obj["model"], changed = spec["model_name"], True
     emap = spec.get("reasoning_effort_map")
-    if not emap:
+    if not emap or "messages" not in obj:
         return changed
     ck = obj.get("chat_template_kwargs")
     ck = dict(ck) if isinstance(ck, dict) else {}
@@ -49,7 +50,8 @@ def rewrite_request(obj, spec):
         return changed
     if isinstance(named, str) and named in emap:
         value = emap[named]
-    elif named is None and "reasoning_effort_default" in spec:
+    elif named is None and "reasoning_effort_default" in spec and not (
+            isinstance(obj.get("reasoning"), dict) and obj["reasoning"].get("effort") is not None):
         value = spec["reasoning_effort_default"]
     else:
         return changed

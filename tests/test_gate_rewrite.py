@@ -40,14 +40,14 @@ class GateRewriteTest(unittest.TestCase):
         self.addCleanup(srv.shutdown)
         self.port = srv.server_address[1]
 
-    def sent(self, body):
+    def sent(self, body, path="/v1/chat/completions"):
         """POST body through the gate; the JSON the engine received."""
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        c.request("POST", "/v1/chat/completions", body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        c.request("POST", path, body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
         c.getresponse().read()
         c.close()
-        path, raw = self.fake.bodies[-1]
-        self.assertEqual(path, "/v1/chat/completions")
+        got, raw = self.fake.bodies[-1]
+        self.assertEqual(got, path)
         return json.loads(raw)
 
     def test_effort_names_become_the_engines_values(self):
@@ -77,6 +77,20 @@ class GateRewriteTest(unittest.TestCase):
             with self.subTest(body=body):
                 got = self.sent({"model": "prod", "messages": msgs, **body})
                 self.assertEqual({k: v for k, v in got.items() if k not in ("model", "messages")}, body)
+
+    def test_only_chat_requests_get_an_effort(self):
+        self.start(reasoning_effort_map=E_MAP, reasoning_effort_default=50)
+        for path, body in (("/v1/completions", {"model": "prod", "prompt": "hi"}),
+                           ("/v1/embeddings", {"model": "prod", "input": "hi"}),
+                           ("/tokenize", {"model": "prod", "prompt": "hi"}),
+                           ("/v1/responses", {"model": "prod", "input": "hi", "reasoning": {"effort": "low"}})):
+            with self.subTest(path=path):
+                self.assertEqual(self.sent(body, path), {**body, "model": "served-model"})
+
+    def test_an_effort_given_elsewhere_is_not_overridden_by_the_default(self):
+        self.start(reasoning_effort_map=E_MAP, reasoning_effort_default=50)
+        body = {"model": "prod", "messages": [{"role": "user", "content": "hi"}], "reasoning": {"effort": "low"}}
+        self.assertEqual(self.sent(body), {**body, "model": "served-model"})
 
     def test_an_engine_without_a_map_gets_the_effort_it_was_sent(self):
         self.start()
