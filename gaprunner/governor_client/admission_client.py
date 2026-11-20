@@ -12,6 +12,9 @@ process session of its own with SPARK_ADMISSION_TOKEN and SPARK_WORKLOAD_OWNER s
 session and released when the command ends. When GapRunner needs the GPU back it revokes the reservation: the command
 gets SIGTERM, then SIGKILL after the grace period GapRunner gives. Exit status 3 means no reservation was granted.
 
+--estimated-incremental-gib is the host memory (GiB, not GPU memory) the work adds. Leave it out when unknown: GapRunner
+then uses the job's configured worst case.
+
 rpc(request, socket_path) sends one request and returns GapRunner's answer (ops: preflight, status, release).
 Standard library only.
 """
@@ -96,10 +99,18 @@ def _signal_group(pgid, sig):
         pass
 
 
-def run(args, command):
+def reserve_request(args):
+    """The reserve message for these arguments. Without --estimated-incremental-gib the field is left out: GapRunner
+    then checks the job at its configured worst case (a zero would read as "needs no host memory")."""
     request = {"op": "reserve", "owner": args.owner, "workload": args.workload, "phase": args.phase,
-               "estimated_incremental_gib": args.estimated_incremental_gib, "min_free_gib": args.min_free_gib,
-               "residency": args.residency, "pid": os.getpid()}
+               "min_free_gib": args.min_free_gib, "residency": args.residency, "pid": os.getpid()}
+    if args.estimated_incremental_gib is not None:
+        request["estimated_incremental_gib"] = args.estimated_incremental_gib
+    return request
+
+
+def run(args, command):
+    request = reserve_request(args)
     try:
         s = _connect(args.socket, None)          # a grant may take minutes: GapRunner answers when it has made room
     except OSError as e:
@@ -182,8 +193,11 @@ def run(args, command):
 def _rebind(args, token, bound):
     try:
         s = _connect(args.socket, 10)
-        _send(s, {"op": "rebind", "owner": args.owner, "token": token, "binding": bound, "workload": args.workload,
-                  "estimated_incremental_gib": args.estimated_incremental_gib, "pid": os.getpid()})
+        msg = {"op": "rebind", "owner": args.owner, "token": token, "binding": bound, "workload": args.workload,
+               "pid": os.getpid()}
+        if args.estimated_incremental_gib is not None:
+            msg["estimated_incremental_gib"] = args.estimated_incremental_gib
+        _send(s, msg)
         lines = Lines(s)
         answer = lines.read()
         if not answer.get("allowed"):
@@ -196,24 +210,29 @@ def _rebind(args, token, bound):
         return None
 
 
-def main(argv):
-    if "--run" not in argv:
-        print(__doc__, file=sys.stderr)
-        return 2
+def parse(argv):
+    """(args, command) from a command line that has --run."""
     cut = argv.index("--run")
     p = argparse.ArgumentParser(prog="admission_client.py")
     p.add_argument("--owner", required=True)
     p.add_argument("--workload", default="")
     p.add_argument("--phase", default="start")
     p.add_argument("--socket", required=True)
-    p.add_argument("--estimated-incremental-gib", type=float, default=0.0)
+    p.add_argument("--estimated-incremental-gib", type=float, default=None)   # host GiB; left out when not given
     p.add_argument("--min-free-gib", type=float, default=0.0)
     p.add_argument("--residency", default="")
     args = p.parse_args(argv[:cut])
     command = argv[cut + 1:]
     if not command:
         p.error("--run needs a command")
-    return run(args, command)
+    return args, command
+
+
+def main(argv):
+    if "--run" not in argv:
+        print(__doc__, file=sys.stderr)
+        return 2
+    return run(*parse(argv))
 
 
 if __name__ == "__main__":

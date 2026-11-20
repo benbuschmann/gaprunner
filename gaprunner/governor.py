@@ -284,15 +284,18 @@ class GovernorJob(D.Driver):
             return r.asked_at if r is not None and not r.granted.is_set() else None
 
     def asked_cpu_gib(self):
-        """Host memory the current request says it needs (estimated_incremental_gib), or None without a request or
-        an estimate. The scheduler and the window-park release use it in place of the job's configured worst case."""
+        """Host memory (GiB) the current request says it needs (estimated_incremental_gib), or None without a
+        request or a usable estimate. A missing, non-numeric, zero or negative estimate is no estimate: the job is
+        then checked at its configured worst case, never at 0. The scheduler and the window-park release use it in
+        place of that worst case."""
         with self.lock:
             r = self.req
             g = r.msg.get("estimated_incremental_gib") if r is not None else None
         try:
-            return max(0.0, float(g)) if g is not None else None
+            g = float(g) if g is not None and not isinstance(g, bool) else None
         except (TypeError, ValueError):
             return None
+        return g if g is not None and 0 < g < float("inf") else None
 
     # ---- helpers ----
     def _alive(self, r):
