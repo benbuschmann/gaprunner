@@ -558,6 +558,8 @@ class Runner:
                                           f"(floor {self.policy.cpu_floor_gib:.0f}); stopped instead")
                     else:
                         parked = self._transition(s, n, "park", reason="exclusive window")
+                        if parked:
+                            s["released"] = False        # the park re-created what release_cmd gave back, as an idle park
                 ok = parked or already or self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
                 s.pop("stop_asked", None)
                 if ok:

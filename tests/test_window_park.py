@@ -290,6 +290,29 @@ class WindowParkTest(unittest.TestCase):
         os.remove(r.top["window_file"])
         self.assertTrue(wait_for(lambda: os.path.exists(started)), "and starts cold at the window's end")
 
+    def test_a_window_park_takes_back_what_release_cmd_gave(self):
+        # release_cmd gave back the engine's host buffer (released); a park re-creates it, as an idle park does
+        d = tempfile.mkdtemp()
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True, "release_cmd": "true",
+                         "stop_cmd": "true", "start_cmd": "true"}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        self.assertEqual(chat(port)[0], 200)
+        r.svc["prod"]["released"] = True
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped" and prod.sleeping))
+        self.assertFalse(r.svc["prod"]["released"], "the next shortage may run release_cmd again")
+        os.remove(r.top["window_file"])
+        self.assertTrue(wait_for(lambda: any(e["event"] == "window_resume" for e in r.recent)))
+        self.assertFalse(r.svc["prod"]["released"])
+
     def test_config_needs_a_stop_to_fall_back_to_and_command_hooks(self):
         base = {"gaprunner": {"state_dir": tempfile.mkdtemp()},
                 "service": [{"name": "prod", "driver": "command", "upstream": "http://127.0.0.1:1", "listen": "127.0.0.1:0",
