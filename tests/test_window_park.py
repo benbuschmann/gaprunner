@@ -210,6 +210,61 @@ class WindowParkTest(unittest.TestCase):
         self.assertTrue(any(e["event"] == "service_start" for e in r.recent), "and start_cmd brought it back")
         self.assertEqual(chat(port)[0], 200)
 
+    def test_a_failed_resume_at_the_window_s_end_is_recovered_by_a_restart(self):
+        d = tempfile.mkdtemp()
+        asleep, stopped = os.path.join(d, "asleep"), os.path.join(d, "stop-ran")
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False},
+            "service": [{"name": "prod", "driver": "command", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True,
+                         "park_cmd": f"touch {asleep}", "resume_cmd": "exit 3",
+                         "state_cmd": f"test -f {asleep} && echo parked || echo hot",
+                         "stop_cmd": f"touch {stopped}", "start_cmd": f"rm -f {asleep}"}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped" and os.path.exists(asleep)))
+        self.assertFalse(os.path.exists(stopped), "parked, not stopped")
+        os.remove(r.top["window_file"])
+        self.assertTrue(wait_for(lambda: any(e["event"] == "service_ready" for e in r.recent)))
+        events = [e["event"] for e in r.recent]
+        self.assertIn("window_resume_failed", events)
+        self.assertIn("service_restart", events, "handled like a failed start: restarted with stop_cmd and start_cmd")
+        self.assertLess(events.index("window_resume_failed"), events.index("service_restart"))
+        self.assertFalse(r.svc["prod"]["window_resuming"])
+        self.assertEqual(chat(port)[0], 200)
+
+    def test_an_engine_already_parked_when_the_window_opens_stays_parked(self):
+        d = tempfile.mkdtemp()
+        stopped, started = os.path.join(d, "stop-ran"), os.path.join(d, "start-ran")
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 0.2, "window_park": True,
+                         "stop_cmd": f"touch {stopped}", "start_cmd": f"touch {started}"}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        self.assertEqual(chat(port)[0], 200)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "parked"), "idle-parked before the window")
+        parks = sum(1 for e in r.recent if e["event"] == "park")
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped"))
+        self.assertTrue(r.svc["prod"]["window_parked"], "kept parked for the window")
+        self.assertEqual(sum(1 for e in r.recent if e["event"] == "park"), parks, "not parked a second time")
+        self.assertFalse(os.path.exists(stopped))
+        os.remove(r.top["window_file"])
+        self.assertTrue(wait_for(lambda: any(e["event"] == "window_resume" for e in r.recent)))
+        self.assertFalse(os.path.exists(started), "resumed, not started")
+        self.assertEqual(chat(port)[0], 200)
+
     def test_config_needs_a_stop_to_fall_back_to_and_command_hooks(self):
         base = {"gaprunner": {"state_dir": tempfile.mkdtemp()},
                 "service": [{"name": "prod", "driver": "command", "upstream": "http://127.0.0.1:1", "listen": "127.0.0.1:0",
