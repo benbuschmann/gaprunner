@@ -167,6 +167,8 @@ def _engine(e, service, name):
     _footprint(e, f"service {service['name']} engine {name}")
     if bool(e.get("stop_cmd")) != bool(e.get("start_cmd")):
         raise ConfigError(f"service {service['name']} engine {name}: stop_cmd and start_cmd go together")
+    if not isinstance(e.get("window_park", False), bool):
+        raise ConfigError(f"service {service['name']} engine {name}: window_park must be true or false")
     if e.get("window_park") and not e.get("stop_cmd"):
         raise ConfigError(f"service {service['name']} engine {name}: window_park needs stop_cmd and start_cmd "
                           "(a failed park falls back to a stop)")
