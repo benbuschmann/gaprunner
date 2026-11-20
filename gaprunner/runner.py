@@ -528,7 +528,9 @@ class Runner:
         return None
 
     def _windows(self):
-        """Exclusive windows: stop services that have a stop_cmd when one opens, start them when it ends."""
+        """Exclusive windows: stop services that have a stop_cmd when one opens, start them when it ends. An engine
+        with window_park = true is parked instead (its driver's park, e.g. park_cmd) and resumed when the window ends;
+        if that park fails it is stopped as usual."""
         ex = C.exclusive_window(self.top)
         for n, s in self.svc.items():
             sp = s["spec"]
@@ -539,15 +541,22 @@ class Runner:
                 if s["inflight"] and self.clock() - s.get("stop_asked", self.clock()) < sp.get("stop_grace_s", 60):
                     s.setdefault("stop_asked", self.clock())
                     continue                             # let requests in flight finish first
-                ok = self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
+                parked = (sp.get("window_park") and s["state"] != PARKED
+                          and self._transition(s, n, "park", reason="exclusive window"))
+                ok = parked or s["state"] == PARKED and sp.get("window_park") \
+                    or self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
                 s.pop("stop_asked", None)
                 if ok:
+                    s["window_parked"] = bool(sp.get("window_park")) and s["state"] == PARKED
                     s["stopped"], s["stopping"], s["state"] = True, False, STOPPED
             elif not ex and (s["stopped"] or s["stopping"]):
                 for jn in plan_wake(self.snapshot(), n, self.policy.reserve_gib):
                     self._park_job(jn, reason="GPU window ended")
                 if s["stopped"]:
-                    if self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
+                    if s.pop("window_parked", False):
+                        s["starting_since"], s["state"] = self.clock(), STARTING
+                        threading.Thread(target=self._window_resume, args=(n,), daemon=True, name=f"window-resume-{n}").start()
+                    elif self._shell(sp["start_cmd"], sp.get("start_timeout_s", 300), n, "start"):
                         s["starting_since"], s["state"] = self.clock(), STARTING
                     else:
                         s["dead_since"] = self.clock()   # requests get a 503 saying why; _recover restarts it
@@ -563,6 +572,18 @@ class Runner:
                 elif self.clock() - s["starting_since"] > sp.get("ready_timeout_s", 1800):
                     self.audit("service_start_timeout", target=n, note="still not ready; check it by hand")
                     s["starting_since"] = None
+
+    def _window_resume(self, name):
+        """Resume an engine parked for a window (outside the lock, as an engine switch resumes one); the tick sees it
+        HOT and logs service_ready. A failed resume is reported like a failed start: _recover restarts the service."""
+        s, t0 = self.svc[name], self.clock()
+        try:
+            s["driver"].resume()
+            self.audit("window_resume", target=name, seconds=round(self.clock() - t0, 1))
+        except Exception as e:  # noqa: BLE001 -- reported, then handled by _recover as a failed start
+            self.audit("window_resume_failed", target=name, error=str(e)[:300])
+            with self.lock:
+                s["starting_since"], s["dead_since"] = None, self.clock()
 
     def _release_if_short(self, snap):
         """If an eligible job is waiting only because host memory is short, ask hot services that can (release_cmd)

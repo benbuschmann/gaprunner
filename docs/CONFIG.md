@@ -73,6 +73,7 @@ A model server GapRunner protects. Required: `name`, `listen`, and either the en
 | `sleep_level` | `1` | vLLM: 1 keeps weights in CPU memory, 2 drops them |
 | `headers` | `{}` | extra HTTP headers for the driver's calls (e.g. an API key) |
 | `start_cmd`, `stop_cmd` | none | needed for engine switching and for no-service periods; set both or neither |
+| `window_park` | `false` | in an exclusive window (no-service period), park the engine with its driver (e.g. `park_cmd`) instead of running `stop_cmd`, and resume it when the window ends instead of `start_cmd`; for engines that park in seconds but cold-start in minutes. Needs `stop_cmd`/`start_cmd` (a failed park falls back to a stop) and, for the `command` driver, `park_cmd` and `resume_cmd`. Engine switches still use `stop_cmd` |
 | `start_timeout_s`, `stop_timeout_s`, `stop_grace_s`, `ready_timeout_s` | `300`, `300`, `60`, `1800` | limits for those commands, for answers underway before a stop, and for a started engine to answer |
 | `switch_out` | `"stop"` | when switched away: `stop` (frees everything) or `sleep` (faster to switch back) |
 | `release_cmd` | none | frees the server's cached CPU memory when a job needs it (e.g. vLLM's pinned sleep buffer) |
