@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import tempfile
+import time
 import unittest
 
 from fakes import FakeGpu, FakeVllm
@@ -62,7 +63,7 @@ class EstimateTest(unittest.TestCase):
 
 
 class LiveRequestWindowParkTest(unittest.TestCase):
-    def start(self, d, stopped, use=True):
+    def start(self, d, stopped, use=True, **job):
         gpu = FakeGpu(100.0)
         prod = FakeVllm(gpu, "prod", 60.0)
         cfg = C.parse({
@@ -72,7 +73,7 @@ class LiveRequestWindowParkTest(unittest.TestCase):
                          "idle_park_s": 600, "window_park": True, "parked": {"cpu_gib": 100},
                          "stop_cmd": f"echo x >> {stopped}", "start_cmd": "true"}],
             "job": [{"name": "v", "driver": "governor", "owner": "studio", "gpu_gib": 10, "coexist": "share",
-                     "grace_s": 1, "running": {"hbm_gib": 10, "cpu_gib": 50}, "use_request_estimate": use}],
+                     "grace_s": 1, "running": {"hbm_gib": 10, "cpu_gib": 50}, "use_request_estimate": use, **job}],
         })
         r, port, stop = run(cfg, gpu)
         self.addCleanup(stop.set)
@@ -111,6 +112,24 @@ class LiveRequestWindowParkTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: any(e["event"] == "window_park_released" for e in r.recent)),
                         "50 GiB configured with 40 free: the parked engine gives way")
         self.assertTrue(os.path.exists(stopped))
+
+    def test_a_window_s_park_and_a_grant_in_the_same_tick_do_not_share_the_same_memory(self):
+        # The request waits for the window (window_only). When the window opens, admitting it (50 GiB) and parking the
+        # engine (100 GiB) each fit the 140 GiB free alone, not together; a grant shows in free memory only once the
+        # app has allocated, so the park must come first and the job be planned on what is left.
+        d = tempfile.mkdtemp()
+        stopped = os.path.join(d, "stop-ran")
+        r, prod = self.start(d, stopped, use=False, window_only=True)
+        gj = r.job["v"]["driver"]
+        req, app = ask(gj, client_message())
+        self.addCleanup(app.close)
+        time.sleep(0.3)
+        self.assertFalse(req.granted.is_set(), "waits for the window")
+        open_window(r)
+        self.assertTrue(wait_for(lambda: req.granted.is_set()))
+        self.assertFalse(prod.sleeping and not os.path.exists(stopped),
+                         "not admitted beside an engine whose park took the memory it was planned on")
+        self.assertTrue(any(e["event"] == "window_park_released" for e in r.recent))
 
     def test_the_estimate_is_used_only_when_the_job_opts_in(self):
         d = tempfile.mkdtemp()
