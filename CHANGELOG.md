@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.30.0
+
+- Engines can translate reasoning effort: `reasoning_effort_map` (effort names to this engine's values) and
+  `reasoning_effort_default` (the effort a request that names none gets). Two engines can read the same name
+  differently: one engine serving DeepSeek V4.1 renders an unset or `high` effort as 75 where vLLM renders 50, so
+  agents on it wrote more tokens per task and hit turn caps more often (a tool-use benchmark on a DGX Station: 2,006-2,233
+  output tokens per item with effort 50 against 3,222-3,399 at that engine's default). The gate writes the mapped value to
+  `chat_template_kwargs.reasoning_effort`; requests with thinking off, a number, or an unlisted name go on as sent.
+
 ## 0.29.1
 
 - A service that starts but never becomes ready was stopped and started again forever, one cycle per

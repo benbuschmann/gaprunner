@@ -29,6 +29,7 @@ class FakeVllm:
 
     def __init__(self, gpu=None, name="prod", gib=60.0, wake_delay=0.05, down_file=None):
         self.sleeping, self.calls, self.wake_delay, self.down_file = False, [], wake_delay, down_file
+        self.bodies = []                      # (path, raw body) of each POST, as the engine received it
         self.state_delay = 0.0                # seconds /is_sleeping takes to answer (a busy server)
         self.gpu, self.name, self.gib = gpu, name, gib
         if gpu is not None:
@@ -70,7 +71,7 @@ class FakeVllm:
 
             def do_POST(self):
                 n = int(self.headers.get("Content-Length") or 0)
-                self.rfile.read(n)
+                fake.bodies.append((self.path.split("?")[0], self.rfile.read(n)))
                 if self.down():
                     return
                 fake.calls.append(self.path.split("?")[0])

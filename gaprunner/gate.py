@@ -5,8 +5,10 @@ engine's reply back unchanged (SSE and chunked responses included).
 GET /gaprunner/state on any gate returns the daemon's status as JSON.
 
 Requests are sent to the service's current engine (it can be switched), with the JSON "model" field rewritten to the
-engine's `model_name` when it has one. A job's own traffic uses the prefix /_job/<job>/ (GapRunner hands jobs that
-URL as GAPRUNNER_URL): it keeps the service awake, but isn't counted as the service's activity.
+engine's `model_name` when it has one, and a reasoning effort translated by the engine's `reasoning_effort_map` /
+`reasoning_effort_default` when it has them (rewrite_request). A job's own traffic uses the prefix /_job/<job>/
+(GapRunner hands jobs that URL as GAPRUNNER_URL): it keeps the service awake, but isn't counted as the service's
+activity.
 
 Probe paths (`passive_paths`, default: health, model list, metrics, version, is_sleeping) are passed straight through:
 they don't count as activity and never wake a parked service, so health checkers and metrics scrapers don't keep
@@ -23,6 +25,38 @@ PASSIVE_DEFAULT = ("/health", "/v1/models", "/metrics", "/version", "/is_sleepin
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
        "upgrade"}
+
+
+def rewrite_request(obj, spec):
+    """The engine's fixes to one JSON request body (a dict), in place; True when anything changed.
+
+    model_name: the "model" field becomes it. reasoning_effort_map: a named reasoning effort (in chat_template_kwargs or
+    the top-level field) becomes the engine's value for it, sent as chat_template_kwargs.reasoning_effort; with
+    reasoning_effort_default, a request that names none gets that value. Two engines can read the same name
+    differently (DeepSeek V4.1: vLLM renders "high" as effort 50, another engine as 75), so the map lives on the engine.
+    A request with thinking off ("none", enable_thinking / thinking false), a number, or a name the map doesn't list
+    goes on as sent."""
+    changed = False
+    if spec.get("model_name") and "model" in obj:
+        obj["model"], changed = spec["model_name"], True
+    emap = spec.get("reasoning_effort_map")
+    if not emap:
+        return changed
+    ck = obj.get("chat_template_kwargs")
+    ck = dict(ck) if isinstance(ck, dict) else {}
+    named = ck.get("reasoning_effort", obj.get("reasoning_effort"))
+    if named == "none" or ck.get("enable_thinking") is False or ck.get("thinking") is False:
+        return changed
+    if isinstance(named, str) and named in emap:
+        value = emap[named]
+    elif named is None and "reasoning_effort_default" in spec:
+        value = spec["reasoning_effort_default"]
+    else:
+        return changed
+    ck["reasoning_effort"] = value
+    obj["chat_template_kwargs"] = ck
+    obj.pop("reasoning_effort", None)
+    return True
 
 
 class Server(http.server.ThreadingHTTPServer):
@@ -88,11 +122,11 @@ def make_handler(runner, name):
                 # pick the engine only now, once the service is ready: a switch that finished meanwhile is honoured
                 spec = runner.svc[name]["spec"]
                 up = urllib.parse.urlparse(spec["upstream"])
-                if body and spec.get("model_name") and (self.headers.get("Content-Type") or "").startswith("application/json"):
+                if body and (spec.get("model_name") or spec.get("reasoning_effort_map")) and \
+                        (self.headers.get("Content-Type") or "").startswith("application/json"):
                     try:
                         obj = json.loads(body)
-                        if isinstance(obj, dict) and "model" in obj:
-                            obj["model"] = spec["model_name"]
+                        if isinstance(obj, dict) and ("model" in obj or "messages" in obj) and rewrite_request(obj, spec):
                             body = json.dumps(obj).encode()
                     except ValueError:
                         pass

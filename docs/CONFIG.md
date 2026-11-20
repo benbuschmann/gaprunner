@@ -66,6 +66,8 @@ A model server GapRunner protects. Required: `name`, `listen`, and either the en
 | `driver` | | `vllm`, `sglang`, `park-protocol` or `command` (see RECIPES.md, Drivers) |
 | `upstream` | | the server's own address |
 | `model_name` | none | the gate rewrites each request's `"model"` to this (one alias, several engines) |
+| `reasoning_effort_map` | none | effort names to the values this engine should get (an integer 1-100 or a name): the gate rewrites a named `reasoning_effort` (in `chat_template_kwargs` or top level) to `chat_template_kwargs.reasoning_effort` = the mapped value. For engines that read the same name differently, e.g. one engine renders DeepSeek V4.1's `high` as 75 where vLLM renders 50: `{ low = 25, high = 50, xhigh = 75, max = 100 }`. Thinking off (`none`, `enable_thinking`/`thinking` false), numbers and unlisted names pass as sent |
+| `reasoning_effort_default` | none | with `reasoning_effort_map`: the effort a request that names none gets (e.g. `50`, vLLM's DeepSeek V4.1 default) |
 | `gpu_gib` or `[running]`/`[parked]` | | memory awake / asleep, per tier: `hbm_gib`, `cpu_gib`, `ssd_gib` |
 | `wake_s`, `park_s` | `1.0`, `1.0` | first guesses for wake and sleep time; replaced by measurements |
 | `sleep_level` | `1` | vLLM: 1 keeps weights in CPU memory, 2 drops them |
