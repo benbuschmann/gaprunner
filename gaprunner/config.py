@@ -209,6 +209,13 @@ def job_defaults(j, i):
         j.setdefault("grace_s", 30.0)         # after a revoke: SIGTERM, then SIGKILL after this long
         # a revoke stops the app's work in progress (a render is lost), so it counts as losing work
         j.setdefault("loses_work", True)
+        # check the app's estimated_incremental_gib (host GiB) instead of running.cpu_gib: only when the app's figure
+        # is known to be host memory, so it is off unless the recipe says so
+        j.setdefault("use_request_estimate", False)
+        if not isinstance(j["use_request_estimate"], bool):
+            raise ConfigError(f"job {j['name']}: use_request_estimate must be true or false")
+    elif "use_request_estimate" in j:
+        raise ConfigError(f"job {j['name']}: use_request_estimate is for driver = \"governor\" jobs")
     j.setdefault("park_s", 5.0)
     j.setdefault("resume_s", 5.0)
     # a job that loses its unsaved work when it steps aside (stopped and started again) needs a quiet spell long

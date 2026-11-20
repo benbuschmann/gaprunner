@@ -1069,7 +1069,7 @@ class Runner:
         for n, e in list(self.job.items()):
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
-            asked = e["driver"].asked_cpu_gib() if hasattr(e["driver"], "asked_cpu_gib") else None
+            asked = e["driver"].asked_cpu_gib() if sp.get("use_request_estimate") else None
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
                             sp["order"], sp["hold"] or bool(e.get("stopping") or e.get("withdrawing")), sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),

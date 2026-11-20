@@ -62,7 +62,7 @@ class EstimateTest(unittest.TestCase):
 
 
 class LiveRequestWindowParkTest(unittest.TestCase):
-    def start(self, d, stopped):
+    def start(self, d, stopped, use=True):
         gpu = FakeGpu(100.0)
         prod = FakeVllm(gpu, "prod", 60.0)
         cfg = C.parse({
@@ -72,7 +72,7 @@ class LiveRequestWindowParkTest(unittest.TestCase):
                          "idle_park_s": 600, "window_park": True, "parked": {"cpu_gib": 100},
                          "stop_cmd": f"echo x >> {stopped}", "start_cmd": "true"}],
             "job": [{"name": "v", "driver": "governor", "owner": "studio", "gpu_gib": 10, "coexist": "share",
-                     "grace_s": 1, "running": {"hbm_gib": 10, "cpu_gib": 50}}],
+                     "grace_s": 1, "running": {"hbm_gib": 10, "cpu_gib": 50}, "use_request_estimate": use}],
         })
         r, port, stop = run(cfg, gpu)
         self.addCleanup(stop.set)
@@ -109,6 +109,30 @@ class LiveRequestWindowParkTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: any(e["event"] == "window_park_released" for e in r.recent)),
                         "50 GiB configured with 40 free: the parked engine gives way")
         self.assertTrue(os.path.exists(stopped))
+
+    def test_the_estimate_is_used_only_when_the_job_opts_in(self):
+        d = tempfile.mkdtemp()
+        stopped = os.path.join(d, "stop-ran")
+        r, prod = self.start(d, stopped, use=False)
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.svc["prod"]["state"] == "stopped"))
+        req, app = ask(r.job["v"]["driver"], client_message("--estimated-incremental-gib", "20"))
+        self.addCleanup(app.close)
+        self.assertTrue(wait_for(lambda: any(e["event"] == "window_park_released" for e in r.recent)),
+                        "without use_request_estimate the configured 50 GiB is checked")
+        self.assertEqual([j.run_cpu_gib for j in r.snapshot().jobs], [50.0])
+
+    def test_use_request_estimate_is_a_boolean_on_governor_jobs(self):
+        base = {"gaprunner": {"state_dir": tempfile.mkdtemp()},
+                "service": [{"name": "prod", "driver": "vllm", "upstream": "http://127.0.0.1:1",
+                             "listen": "127.0.0.1:0", "gpu_gib": 10}]}
+        gov = {"name": "v", "driver": "governor", "owner": "studio", "gpu_gib": 10}
+        self.assertFalse(C.parse({**base, "job": [gov]})["jobs"][0]["use_request_estimate"])
+        with self.assertRaisesRegex(C.ConfigError, "true or false"):
+            C.parse({**base, "job": [{**gov, "use_request_estimate": "yes"}]})
+        with self.assertRaisesRegex(C.ConfigError, "governor"):
+            C.parse({**base, "job": [{"name": "t", "driver": "restart", "start_cmd": "true", "gpu_gib": 1,
+                                      "use_request_estimate": True}]})
 
 
 if __name__ == "__main__":
