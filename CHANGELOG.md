@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.31.2
+
+- A governor job is measured by its live request. When the app's request carries `estimated_incremental_gib`, the
+  scheduler and the window-park release check that figure against free host memory instead of the job's configured
+  `running.cpu_gib` (its worst case); without a request or an estimate, the configured figure applies as before. On a
+  DGX Station an Imagination Studio video job asked for 95 GiB with 140 GiB free, was checked at its configured
+  165 GiB, and the window-parked engine (parked in 7.8 s) was stopped and cost a 385 s cold start. A later, larger
+  request is checked again, so a parked engine still gives way when memory is really short.
+
 ## 0.31.1
 
 - A window-parked engine gives way to a job that is short of host memory. A parked engine can still hold most of
