@@ -541,8 +541,17 @@ class Runner:
                 if s["inflight"] and self.clock() - s.get("stop_asked", self.clock()) < sp.get("stop_grace_s", 60):
                     s.setdefault("stop_asked", self.clock())
                     continue                             # let requests in flight finish first
-                parked = (sp.get("window_park") and s["state"] != PARKED
-                          and self._transition(s, n, "park", reason="exclusive window"))
+                parked = False
+                if sp.get("window_park") and s["state"] != PARKED:
+                    # the same host-memory rule as an idle park: a park that would leave less than cpu_floor_gib
+                    # free is not made; the engine is stopped instead
+                    need, free = self._svc_park_host_gib(s), self.host_mem()
+                    if free is not None and need > 0 and free - need < self.policy.cpu_floor_gib:
+                        self.audit("window_park_skipped", target=n,
+                                   reason=f"parking takes {need:.0f} GiB of host memory, {free:.0f} GiB available "
+                                          f"(floor {self.policy.cpu_floor_gib:.0f}); stopped instead")
+                    else:
+                        parked = self._transition(s, n, "park", reason="exclusive window")
                 ok = parked or s["state"] == PARKED and sp.get("window_park") \
                     or self._shell(sp["stop_cmd"], sp.get("stop_timeout_s", 300), n, "stop")
                 s.pop("stop_asked", None)
@@ -889,6 +898,12 @@ class Runner:
         j["waiting_since"] = self.clock()
         return ok
 
+    def _svc_park_host_gib(self, e):
+        """Host memory parking this service's engine takes: its [parked] cpu_gib less what it holds running (all of
+        it after a release_cmd gave that back), or the measured figure when larger (host_park_gib)."""
+        parked, running = float(e["spec"]["parked"]["cpu_gib"] or 0), float(e["spec"]["running"]["cpu_gib"] or 0)
+        return self.host_park_gib(e["cost_key"], parked if e["released"] else max(0.0, parked - running))
+
     def host_park_gib(self, key, declared):
         """Host memory a park takes: the recipe's figure, or what GapRunner measured (MemAvailable before and after
         its recent parks, median) when that is larger. A recipe that understates it would let host memory run out."""
@@ -1065,11 +1080,7 @@ class Runner:
         q = C.queue_overrides(self.top)
         services = [Service(n, e["state"], e["inflight"] + e["job_inflight"], max(e["last_done"], e.get("job_last_done", 0)),
                             e["spec"]["gpu_gib"], e["service"]["idle_park_s"],
-                            self.costs.get(e["cost_key"], "resume")[0],
-                            self.host_park_gib(e["cost_key"],
-                                               float(e["spec"]["parked"]["cpu_gib"] or 0) if e["released"] else
-                                               max(0.0, float(e["spec"]["parked"]["cpu_gib"] or 0) -
-                                                   float(e["spec"]["running"]["cpu_gib"] or 0))),
+                            self.costs.get(e["cost_key"], "resume")[0], self._svc_park_host_gib(e),
                             warming=e.get("warm_since") is not None and
                             now - e["warm_since"] < e["spec"].get("warm_hold_max_s", 300))
                     for n, e in self.svc.items()]

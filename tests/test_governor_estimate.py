@@ -77,7 +77,9 @@ class LiveRequestWindowParkTest(unittest.TestCase):
         r, port, stop = run(cfg, gpu)
         self.addCleanup(stop.set)
         r.governor.install()                         # the folder the app reads (no socket: requests are put in directly)
-        r.host_mem = lambda: 40.0                    # configured 50: short; asked 20: 40 - 20 >= 16
+        # the park takes 100 GiB (140 free before, 40 after) and a stop gives it back; with the engine parked a job
+        # checked at its configured 50 GiB is short, one asking 20 GiB fits (40 - 20 >= 16)
+        r.host_mem = lambda: 40.0 if prod.sleeping and not os.path.exists(stopped) else 140.0
         return r, prod
 
     def test_a_request_whose_estimate_fits_starts_beside_the_window_parked_engine(self):
