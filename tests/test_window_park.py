@@ -108,6 +108,33 @@ class WindowParkTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: os.path.exists(started)), "the window's end starts it cold")
         self.assertFalse(any(e["event"] == "window_resume" for e in r.recent))
 
+    def test_a_job_whose_live_request_fits_starts_beside_the_window_parked_engine(self):
+        # Seen on a DGX Station: Imagination Studio asked the governor for 95 GiB with 140 GiB free, but was checked at
+        # its configured 165 GiB, so the parked engine was stopped and cost a 385 s cold start. The live request decides.
+        d = tempfile.mkdtemp()
+        stopped = os.path.join(d, "stop-ran")
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d, "verify_free_s": 0.5},
+            "policy": {"reserve_gib": 0, "juggle_s": 0, "park_only_if_work": False, "cpu_floor_gib": 16},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60,
+                         "idle_park_s": 600, "window_park": True, "parked": {"cpu_gib": 100},
+                         "stop_cmd": f"touch {stopped}", "start_cmd": "true"}],
+            "job": [{"name": "j", "driver": "restart", "gpu_gib": 10, "coexist": "share", "park_s": 0.1,
+                     "start_cmd": "sleep 60", "running": {"hbm_gib": 10, "cpu_gib": 50}}],
+        })
+        r, port, stop = run(cfg, gpu)
+        self.addCleanup(stop.set)
+        self.addCleanup(lambda: r.job["j"]["driver"].kill())
+        r.host_mem = lambda: 40.0                           # configured 50: short; asked 20: 40 - 20 >= 16
+        r.job["j"]["driver"].asked_cpu_gib = lambda: 20.0
+        open_window(r)
+        self.assertTrue(wait_for(lambda: r.job["j"]["state"] == "hot"), "the job starts on its live request")
+        self.assertTrue(prod.sleeping, "the engine stays parked")
+        self.assertFalse(os.path.exists(stopped))
+        self.assertFalse(any(e["event"] == "window_park_released" for e in r.recent))
+
     def test_a_failed_window_park_falls_back_to_stop_and_start(self):
         d = tempfile.mkdtemp()
         down = os.path.join(d, "prod-down")
