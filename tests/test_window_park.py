@@ -221,6 +221,10 @@ class WindowParkTest(unittest.TestCase):
             C.parse(base)
         base["service"][0].update(park_cmd="true", resume_cmd="true")
         C.parse(base)
+        for bad in ("false", "true", 1):
+            base["service"][0]["window_park"] = bad
+            with self.assertRaisesRegex(C.ConfigError, "window_park must be true or false"):
+                C.parse(base)
 
 
 class ReleaseTest(unittest.TestCase):
