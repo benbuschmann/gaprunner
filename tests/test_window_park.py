@@ -262,6 +262,7 @@ class WindowParkTest(unittest.TestCase):
         self.assertFalse(os.path.exists(stopped))
         os.remove(r.top["window_file"])
         self.assertTrue(wait_for(lambda: any(e["event"] == "window_resume" for e in r.recent)))
+        self.assertTrue(wait_for(lambda: any(e["event"] == "service_ready" for e in r.recent)))
         self.assertFalse(os.path.exists(started), "resumed, not started")
         self.assertEqual(chat(port)[0], 200)
 
