@@ -975,9 +975,10 @@ class Runner:
         return freed
 
     def _resume_job(self, name, reason="", ask_id=None):
-        """ask_id: for a governor job planned on its request's estimate, that request's token. If another request
-        has taken its place since the snapshot, nothing is admitted: the next tick plans the new one on its own
-        estimate."""
+        """ask_id: for a governor job with use_request_estimate, the token of the request the plan was made for
+        (whether its figure came from the request or from the config), or "" when the snapshot saw no request. If
+        another request has taken its place since the snapshot, nothing is admitted: the next tick plans the new one
+        on its own estimate."""
         j = self.job[name]
         if j.get("stopping") or j.get("withdrawing"):
             return False
@@ -1115,13 +1116,15 @@ class Runner:
             sp = {**e["spec"], **{k: v for k, v in q.get(n, {}).items() if v is not None}}
             waiting = e["driver"].waiting_since() if hasattr(e["driver"], "waiting_since") else e["waiting_since"]
             ask_id, asked = e["driver"].asked() if sp.get("use_request_estimate") else (None, None)
+            if sp.get("use_request_estimate") and ask_id is None:
+                ask_id = ""                  # no request seen: nothing may be granted on this plan
             jobs.append(Job(n, e["state"], sp["gpu_gib"], self.costs.get(n, "park")[0], self.costs.get(n, "resume")[0],
                             sp["order"], sp["hold"] or bool(e.get("stopping") or e.get("withdrawing")), sp["window_only"], sp["enabled"], waiting, e["parked_at"],
                             sp["coexist"], n in self.calibrating or e["frozen"], e.get("health") or None, self._blocked_by(e, n),
                             asked if asked is not None else
                             max(0.0, float(sp["running"]["cpu_gib"] or 0) - float(sp["parked"]["cpu_gib"] or 0)),
                             float(self.costs.get(n, "save")[0] or 0) if sp["loses_work"] else 0.0, sp["loses_work"],
-                            frozen=e["frozen"], ask_id=ask_id if asked is not None else None))
+                            frozen=e["frozen"], ask_id=ask_id))
         return Snapshot(now, services, jobs, total, (reading or {}).get("used_gib"), C.window_open(self.top),
                         self.paused(), C.exclusive_window(self.top), self.holds(), self.host_mem())
 

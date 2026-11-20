@@ -119,8 +119,8 @@ class GovernorJob(D.Driver):
     def resume(self, request_id=None):
         """Admit the waiting request: save its token, then answer it. Returns at once; the app binds its command
         within bind_timeout_s or the reservation is revoked (Governor.tick), so no lock is held while it starts.
-        request_id: the token of the request the scheduler planned for (its estimate was checked); a different
-        request waiting now is not admitted (RequestChanged), so it is planned again with its own estimate."""
+        request_id: the token of the request the scheduler planned for ("" when it saw none); a different request
+        waiting now is not admitted (RequestChanged), so it is planned again with its own estimate."""
         with self.lock:
             r = self.req
             if r is None or r.granted.is_set():
