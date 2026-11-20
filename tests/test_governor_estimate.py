@@ -177,6 +177,49 @@ class RequestIdentityTest(unittest.TestCase):
         gj.resume(request_id=b.token)
         self.assertTrue(b.granted.is_set())
 
+    def runner(self):
+        from gaprunner.runner import Runner
+        d = tempfile.mkdtemp()
+        gpu = FakeGpu(100.0)
+        prod = FakeVllm(gpu, "prod", 60.0)
+        self.addCleanup(prod.srv.server_close)
+        self.addCleanup(prod.srv.shutdown)
+        cfg = C.parse({
+            "gaprunner": {"mode": "live", "state_dir": d},
+            "policy": {"reserve_gib": 0, "cpu_floor_gib": 16},
+            "service": [{"name": "prod", "driver": "vllm", "upstream": prod.url, "listen": "127.0.0.1:0", "gpu_gib": 60}],
+            "job": [{"name": "v", "driver": "governor", "owner": "studio", "gpu_gib": 10, "grace_s": 1,
+                     "running": {"hbm_gib": 10, "cpu_gib": 50}, "use_request_estimate": True}],
+        })
+        r = Runner(cfg, gpu=gpu)
+        r.governor.install()
+        r.host_mem = lambda: 140.0
+        return r
+
+    def test_a_request_planned_at_the_configured_figure_keeps_its_identity(self):
+        # A has no estimate, so it is planned at the configured 50 GiB; B, asking 200 GiB, replaces it before the grant
+        r = self.runner()
+        gj = r.job["v"]["driver"]
+        a, app_a = ask(gj, client_message())
+        self.addCleanup(app_a.close)
+        planned = r.snapshot().jobs[0]
+        self.assertEqual((planned.run_cpu_gib, planned.ask_id), (50.0, a.token))
+        gj.gone(a)
+        b, app_b = ask(gj, client_message("--estimated-incremental-gib", "200"))
+        self.addCleanup(app_b.close)
+        self.assertFalse(r._resume_job("v", "fits", ask_id=planned.ask_id))
+        self.assertFalse(b.granted.is_set(), "B is not admitted on A's plan")
+
+    def test_a_plan_made_with_no_request_grants_nothing(self):
+        r = self.runner()
+        gj = r.job["v"]["driver"]
+        planned = r.snapshot().jobs[0]
+        self.assertEqual(planned.ask_id, "")
+        b, app_b = ask(gj, client_message("--estimated-incremental-gib", "200"))
+        self.addCleanup(app_b.close)
+        self.assertFalse(r._resume_job("v", "fits", ask_id=planned.ask_id))
+        self.assertFalse(b.granted.is_set())
+
 
 if __name__ == "__main__":
     unittest.main()

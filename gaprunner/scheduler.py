@@ -65,7 +65,7 @@ class Job:
     save_s: float = 0.0            # loses unsaved work when it steps aside: running time to its next saved point
     loses_work: bool = False       # stepping aside throws away work since its last saved point (restart jobs)
     frozen: bool = False           # paused by hand where it is: keeps its GPU memory but not a max_active_jobs slot
-    ask_id: str = None             # the app request whose estimate gave run_cpu_gib (governor jobs), else None
+    ask_id: str = None             # use_request_estimate jobs: the app request run_cpu_gib was planned for ("" none)
 
 
 @dataclass
