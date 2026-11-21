@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.31.4
+
+- A service that an exclusive window has stopped or parked can't be switched to another engine until the window
+  ends. A switch by hand (page or API) is refused with the reason; a scheduled slot that falls inside the window is
+  taken when the window ends. Before, the switch started the new engine inside the window, and with `window_park`
+  GapRunner still counted it as parked, so it held the GPU for the rest of the window.
+
 ## 0.31.3
 
 Fixes to 0.30.0-0.31.2 found in review.
