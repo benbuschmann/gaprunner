@@ -602,13 +602,17 @@ class Runner:
         s, t0 = self.svc[name], self.clock()
         try:
             s["driver"].resume()
-            self.audit("window_resume", target=name, seconds=round(self.clock() - t0, 1))
+            took = self.clock() - t0
+            self.audit("window_resume", target=name, seconds=round(took, 1))
             with self.lock:
                 s["window_resuming"] = False
         except Exception as e:  # noqa: BLE001 -- reported, then handled by _recover as a failed start
             self.audit("window_resume_failed", target=name, error=str(e)[:300])
             with self.lock:
                 s["starting_since"], s["dead_since"], s["window_resuming"] = None, self.clock(), False
+        else:
+            with self.lock:                     # under the lock, as the tick's transitions record theirs
+                self.costs.record(s["cost_key"], "resume", took)
 
     def _release_if_short(self, snap):
         """If a job is waiting only because host memory is short, give it host memory: engines parked for an
@@ -940,9 +944,11 @@ class Runner:
         return self.host_park_gib(e["cost_key"], parked if e["released"] else max(0.0, parked - running))
 
     def host_park_gib(self, key, declared):
-        """Host memory a park takes: the recipe's figure, or what GapRunner measured (MemAvailable before and after
-        its recent parks, median) when that is larger. A recipe that understates it would let host memory run out."""
-        measured, ok = self.costs.get(key, "park_host")
+        """Host memory a park takes: the recipe's figure, or what GapRunner measured at the last park (MemAvailable
+        before and after) when that is larger. A recipe that understates it would let host memory run out. The last
+        park, not a median: one engine's cost can switch between states (HotE: ~40 GiB with its Engram pinned, which
+        the park releases, ~228 GiB without), and a median of both refused parks that fit."""
+        measured, ok = self.costs.last(key, "park_host")
         return max(float(declared or 0), float(measured or 0)) if ok else float(declared or 0)
 
     def gpu_peak_gib(self, name):
@@ -1387,8 +1393,8 @@ class Runner:
                                                    "current": en == e["engine"], "notes": x["spec"].get("notes", "")}
                                               for en, x in e["engines"].items()},
                                   "cpu_gib_now": _rss_gib(e["driver"].pids()),
-                                  "host_park_gib": self.costs.get(e["cost_key"], "park_host")[0]
-                                  if self.costs.get(e["cost_key"], "park_host")[1] else None,
+                                  "host_park_gib": self.costs.last(e["cost_key"], "park_host")[0]
+                                  if self.costs.last(e["cost_key"], "park_host")[1] else None,
                                   "gpu_gib": e["spec"]["gpu_gib"], "idle_park_s": e["service"]["idle_park_s"],
                                   "driver": e["spec"]["driver"], "gap_samples": len(m),
                                   "p_idle_30s_more": m.p_continue(idle, 30), "median_more_idle_s": m.median_remaining(idle),
@@ -1400,8 +1406,8 @@ class Runner:
             out["jobs"][j.name] = {"state": e["state"], "order": j.order, "hold": j.hold, "window_only": j.window_only,
                                    "coexist": j.coexist, "paused": e["paused"], "running": e["spec"]["running"],
                                    "parked": e["spec"]["parked"], "cpu_gib_now": _rss_gib(e["driver"].pids()),
-                                   "host_park_gib": self.costs.get(j.name, "park_host")[0]
-                                   if self.costs.get(j.name, "park_host")[1] else None,
+                                   "host_park_gib": self.costs.last(j.name, "park_host")[0]
+                                   if self.costs.last(j.name, "park_host")[1] else None,
                                    "gpu_peak_gib": self.gpu_peak_gib(j.name), "gpu_peak_now": e.get("gpu_peak_now"),
                                    "workdir": e["spec"].get("workdir"), "start_cmd": e["spec"].get("start_cmd"),
                                    "result": e["result"], "ssd_paths": e["spec"].get("ssd_paths", []),

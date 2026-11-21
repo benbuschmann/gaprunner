@@ -44,6 +44,11 @@ class CostBook:
             return statistics.median(s), True
         return self.seeds.get(self._key(name, op)), False
 
+    def last(self, name, op):
+        """(value, measured?) -- the most recent sample, else (None, False)."""
+        s = self.samples.get(self._key(name, op))
+        return (s[-1], True) if s else (None, False)
+
     def _save(self):
         if not self.path:
             return

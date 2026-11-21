@@ -74,6 +74,17 @@ class MeasuredHostTest(unittest.TestCase):
         r.host_mem = lambda: 160.0
         self.assertEqual([s.park_cpu_gib for s in r.snapshot().services], [170])
 
+    def test_the_last_park_decides_not_a_median(self):
+        # HotE on a DGX Station: ~40 GiB parks (Engram pinned, released by the park) and ~228 GiB ones; their median,
+        # 181 GiB, refused a park that took 40 GiB with 183 GiB free
+        r = self.build(parked_cpu=0)
+        key = r.svc["prod"]["cost_key"]
+        for x in (228, 228, 228, 40, 40):
+            r.costs.record(key, "park_host", x)
+        self.assertEqual(r.host_park_gib(key, 0), 40)
+        r.costs.record(key, "park_host", 228)
+        self.assertEqual(r.host_park_gib(key, 0), 228)
+
     def test_the_service_doesnt_sleep_when_its_measured_cost_doesnt_fit(self):
         # 160 GiB available: the recipe's 41 GiB would fit, the measured 170 GiB would leave host memory below the floor
         s = snap(jobs=[job("a", order=0)])

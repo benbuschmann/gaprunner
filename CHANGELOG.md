@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.31.5
+
+- A window-parked engine's wake at the end of a window is recorded as a resume cost. Before, only other wakes were,
+  so the estimate could stay on old cold starts: on a DGX Station it showed 335 s for an engine that woke in 26 s.
+- The host memory a park takes is the last park's measurement (or the recipe's figure when larger), not the median
+  of recent parks. One engine's cost can switch between two states (about 40 GiB when the park releases pinned
+  tables, about 228 GiB when it doesn't); the median, 181 GiB, kept the service from sleeping for a waiting job
+  with 183 GiB free. An engine that can't afford a park still has to refuse it itself (HotE's park checks host
+  memory and falls back to a stop).
+
 ## 0.31.4
 
 - A service that an exclusive window has stopped or parked can't be switched to another engine until the window
