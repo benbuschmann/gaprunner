@@ -421,6 +421,9 @@ class Runner:
             raise ValueError(f"{name} is already switching to {s['switching']['to']}")
         if target == s["engine"]:
             return f"{name} already runs {target}"
+        if s["stopped"] or s["stopping"] or s.get("window_resuming"):
+            # a switch would start the new engine inside the window, with the old one's stopped/parked marks on it
+            raise ValueError(f"{name} is down for an exclusive window; switch it when the window ends")
         s["switching"] = {"to": target, "since": self.clock(), "reason": reason}
         threading.Thread(target=self._switch, args=(name, target, reason), daemon=True, name=f"switch-{name}").start()
         return f"Switching {name} from {s['engine']} to {target}"
@@ -507,6 +510,8 @@ class Runner:
                 s["schedule_slot"] = key               # don't act on a slot that began before GapRunner started
                 continue
             if key != s["schedule_slot"]:
+                if s["stopped"] or s["stopping"] or s.get("window_resuming"):
+                    continue                           # a slot inside an exclusive window is taken when it ends
                 s["schedule_slot"] = key
                 if slot["engine"] != s["engine"]:
                     self.switch_engine(n, slot["engine"], reason=f"schedule {slot['at']}")

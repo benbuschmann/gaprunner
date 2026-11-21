@@ -118,6 +118,17 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(r.status, 503)
         self.assertIn(b"switching to qwen", r.read())
 
+    def test_no_switch_while_the_service_is_down_for_an_exclusive_window(self):
+        s = self.r.svc["prod"]
+        for flag in ("stopped", "stopping", "window_resuming"):
+            s[flag] = True
+            with self.assertRaisesRegex(ValueError, "exclusive window"):
+                self.r.switch_engine("prod", "qwen")
+            s[flag] = False
+        self.assertIsNone(s["switching"])
+        self.r.switch_engine("prod", "qwen")                                        # the window is over
+        self.assertTrue(self.wait_for(lambda: self.r.svc["prod"]["engine"] == "qwen"))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -151,3 +162,27 @@ class ScheduleTest(unittest.TestCase):
         r.svc["prod"]["engine"] = "qwen"
         r._schedules()
         self.assertEqual(calls, ["qwen", "glm"])
+
+    def test_a_slot_that_falls_in_an_exclusive_window_is_taken_when_the_window_ends(self):
+        import datetime as dt
+        d = tempfile.mkdtemp()
+        cfg = C.parse({"gaprunner": {"state_dir": d},
+                       "service": [{"name": "prod", "listen": "127.0.0.1:0", "schedule": [{"at": "23:00", "engine": "qwen"}],
+                                    "engines": [{"name": "glm", "driver": "vllm", "upstream": "http://127.0.0.1:9", "gpu_gib": 70,
+                                                 "stop_cmd": "true", "start_cmd": "true"},
+                                                {"name": "qwen", "driver": "vllm", "upstream": "http://127.0.0.1:9", "gpu_gib": 30,
+                                                 "stop_cmd": "true", "start_cmd": "true"}]}]})
+        now = [dt.datetime(2026, 10, 23, 22, 58).timestamp()]
+        r = Runner(cfg, gpu=FakeGpu(100), clock=lambda: now[0])
+        calls = []
+        r.switch_engine = lambda n, e, reason="": calls.append(e)
+        r.svc["prod"]["stopped"] = True                  # an exclusive window has the engine stopped or parked,
+        r._schedules()                                   # also at GapRunner's first look after a restart
+        now[0] = dt.datetime(2026, 10, 23, 23, 0).timestamp()
+        r._schedules()
+        self.assertEqual(calls, [])
+        r.svc["prod"]["stopped"] = False                 # the window ended half an hour later
+        now[0] = dt.datetime(2026, 10, 23, 23, 30).timestamp()
+        r._schedules()
+        r._schedules()
+        self.assertEqual(calls, ["qwen"])
