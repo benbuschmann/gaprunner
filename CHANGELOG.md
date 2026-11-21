@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.31.3
+
+Fixes to 0.30.0-0.31.2 found in review.
+
+- A governor request without an estimate, or with one of zero or less, is checked at the job's configured worst
+  case. The admission client sent 0 when `--estimated-incremental-gib` wasn't given, which admitted the job as
+  needing no host memory; it now leaves the field out.
+- The app's estimate is used only with `use_request_estimate = true` on the job (default false), because it must be
+  host memory in GiB. Only the request the plan was made for is admitted, whether its figure came from the request
+  or from the config; one that took its place is planned again.
+- While an exclusive window is opening, its parks and stops happen before jobs are admitted on the same tick, so a
+  job isn't granted host memory the park is about to take.
+- A window park that would leave less than `cpu_floor_gib` of host memory free (declared or measured parked
+  footprint) is a stop instead (`window_park_skipped`). A park that fails always falls back to `stop_cmd`, even if
+  the engine then reports itself parked. A successful window park clears the `release_cmd` mark, as an idle park
+  does.
+- A window that opens while the last window's resume is still running waits for it.
+- A window-parked engine is stopped only for a job the scheduler would start if host memory allowed it, counting
+  measured parked host memory, the largest holder first and only until the job fits.
+- `window_park` must be `true` or `false`.
+- `reasoning_effort_map` / `reasoning_effort_default` apply only to requests with `messages`, and the default no
+  longer overrides an effort given as `reasoning.effort`.
+- Tests for the window_park failure paths; docs for `window_park` and the governor estimate.
+
+Known limitations: two governor jobs granted on consecutive ticks are each checked against free host memory as
+measured then, so the second can be granted before the first has allocated; with `max_active_jobs`, a window-parked
+engine can be stopped for a job that then waits for a slot; an engine switch during an exclusive window is not
+supported with `window_park`.
+
 ## 0.31.2
 
 - A governor job is measured by its live request. When the app's request carries `estimated_incremental_gib`, the
