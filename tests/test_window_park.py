@@ -74,6 +74,8 @@ class WindowParkTest(unittest.TestCase):
         self.assertFalse(os.path.exists(started), "start_cmd did not run: the engine was resumed")
         self.assertTrue(any(e["event"] == "window_resume" for e in r.recent))
         self.assertEqual(chat(port)[0], 200)
+        # the wake is a measured resume cost: without it the estimate stayed on old cold starts (335 s for a 26 s wake)
+        self.assertEqual(len(r.costs.samples.get(f'{r.svc["prod"]["cost_key"]}:resume', [])), 1)
 
     def test_a_job_short_of_host_memory_gets_the_window_parked_engine_stopped(self):
         # Seen on a DGX Station: the window-parked engine kept a host-memory copy of its GPU image and the window's job
